@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ASCII Shader — Phase 1: live fullscreen</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: #101014; color: #ddd;
+    font: 13px/1.4 system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  .bar {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 8px 10px; background: #17171d; border-bottom: 1px solid #2a2a33;
+  }
+  .bar input[type="text"] {
+    flex: 1 1 260px; background: #0d0d12; color: #ddd; border: 1px solid #333;
+    border-radius: 4px; padding: 6px 9px; font-family: Consolas, monospace;
+  }
+  button {
+    background: #23232c; color: #ddd; border: 1px solid #3a3a45; border-radius: 4px;
+    padding: 6px 10px; cursor: pointer;
+  }
+  button:hover { background: #2c2c38; }
+  button.primary { background: #1d3a24; border-color: #2f5c39; color: #a8f0b0; }
+  select { background: #0d0d12; color: #ddd; border: 1px solid #333; border-radius: 4px; padding: 5px; }
+  label.chk { display: inline-flex; align-items: center; gap: 5px; color: #aaa; }
+  #status { color: #8a8; font-family: Consolas, monospace; font-size: 12px; }
+  #fps { color: #7fe08a; font-family: Consolas, monospace; font-size: 12px; }
+  a { color: #7fb0e0; }
+
+  #stage { position: relative; flex: 1; min-height: 0; background: #000; }
+  #wrap { position: absolute; inset: 0; isolation: isolate; background: #fff; }
+  #wrap iframe { width: 100%; height: 100%; border: 0; display: block; }
+  #rightHalf { position: absolute; top: 0; right: 0; bottom: 0; width: 50%; pointer-events: none; }
+  #out { position: absolute; inset: 0; width: 100%; height: 100%; display: none; pointer-events: none; }
+  #out.visible { display: block; }
+  /* demo & split: the canvas itself takes input (ASCII cursor replaces the system one) */
+  #out.interactive { pointer-events: auto; cursor: none; }
+  #out:focus { outline: none; }
+
+  /* overlay: ascii sits exactly on the iframe, clicks pass through */
+  #stage[data-layout="overlay"] #out { inset: 0; width: 100%; height: 100%; }
+  /* split: page left, ascii right */
+  #stage[data-layout="split"] #wrap { right: 50%; }
+  #stage[data-layout="split"] #out { left: auto; right: 0; width: 50%; height: 100%; }
+  /* full: ascii covers everything (demo / other-tab monitor) */
+  #stage[data-layout="full"] #out { inset: 0; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <strong>ASCII·browser</strong>
+    <input type="text" id="url" value="/article.html" spellcheck="false">
+    <button id="go">Открыть в iframe</button>
+    <button id="openTab" title="для сайтов, запрещающих iframe">↗ в новой вкладке</button>
+    <span style="flex-basis:100%"></span>
+    <button id="srcDemo" class="primary" title="без разрешений">▶ Демо-поток</button>
+    <button id="srcTab" class="primary" title="один клик Share в диалоге">▶ ASCII этой вкладки</button>
+    <button id="srcPick" class="primary" title="выбери другую вкладку в диалоге">▶ ASCII другой вкладки…</button>
+    <button id="stop">■ Стоп</button>
+    <select id="preset">
+      <option value="ascii10" selected>ASCII 10</option>
+      <option value="ascii70">ASCII 70</option>
+      <option value="cyrillic">Кириллица</option>
+      <option value="blocks">Blocks</option>
+    </select>
+    <label class="chk">cell <span id="cellVal">8px</span>
+      <input type="range" id="cell" min="4" max="16" value="8" style="width:90px"></label>
+    <select id="mode">
+      <option value="0" selected>mono</option>
+      <option value="1">color</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="invert"> invert</label>
+    <label class="chk"><input type="checkbox" id="textpass" checked> текст</label>
+    <label class="chk"><input type="checkbox" id="cursoron" checked> ASCII-курсор</label>
+    <label class="chk"><input type="checkbox" id="hidecur"> скрыть системный</label>
+    <span id="chip" style="color:#e0c97f; font: 11px Consolas, monospace"></span>
+    <span id="fps"></span>
+    <span id="status"></span>
+    <a href="/index.html">← фаза 0</a>
+  </div>
+
+  <div id="stage" data-layout="full">
+    <div id="wrap"><iframe id="frame" src="/article.html"></iframe></div>
+    <div id="rightHalf"></div>
+    <canvas id="out" tabindex="0"></canvas>
+  </div>
+
+  <script type="module" src="live.js"></script>
+</body>
+</html>

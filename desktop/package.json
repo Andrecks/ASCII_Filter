@@ -1,0 +1,13 @@
+{
+  "name": "ascii-shader-desktop",
+  "version": "0.1.0",
+  "description": "Whole-screen real-time ASCII filter for Windows",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "selftest": "electron . --selftest"
+  },
+  "devDependencies": {
+    "electron": "^43.4.1"
+  }
+}

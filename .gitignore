@@ -1,0 +1,27 @@
+# dependencies (electron binary lives here, ~200 MB — restored by `npm install`)
+node_modules/
+
+# generated test evidence (desktop --selftest / --probe runs)
+desktop/selftest.json
+desktop/selftest.png
+desktop/probe.json
+desktop/probe.png
+desktop/probe-video.png
+
+# packaged builds and archives (electron-builder, extension packing)
+desktop/dist/
+desktop/out/
+*.zip
+*.rar
+*.7z
+
+# local assistant/tool state (launch.json is shared config and stays tracked)
+.claude/settings.local.json
+
+# logs
+npm-debug.log*
+
+# OS / editor junk
+Thumbs.db
+desktop.ini
+.DS_Store

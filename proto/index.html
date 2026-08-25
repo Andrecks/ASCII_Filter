@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ASCII Shader — Phase 0</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 20px; background: #101014; color: #ddd;
+    font: 14px/1.5 system-ui, sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #888; margin: 0 0 16px; }
+  .cols { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .panel { background: #17171d; border: 1px solid #2a2a33; border-radius: 8px; padding: 14px; }
+  .stage { position: relative; display: inline-block; }
+  #scene { display: block; border-radius: 4px; }
+  #frame {
+    position: absolute; box-sizing: border-box; cursor: grab; touch-action: none;
+    border: 2px dashed #7fe08a; border-radius: 2px;
+    box-shadow: 0 0 0 9999px rgba(0,0,0,.25);
+  }
+  #frame:active { cursor: grabbing; }
+  #out { display: block; background: #000; border-radius: 4px; image-rendering: pixelated; }
+  #out.zoom2x { width: 200px; height: 200px; }
+  .meta { color: #8a8; font: 12px Consolas, monospace; margin-top: 8px; }
+  #fps { color: #7fe08a; font: bold 13px Consolas, monospace; }
+  label { display: block; margin: 10px 0 2px; color: #aaa; font-size: 12px; }
+  input[type="text"] { width: 240px; background: #0d0d12; color: #ddd;
+    border: 1px solid #333; border-radius: 4px; padding: 5px 8px; font-family: Consolas, monospace; }
+  select { background: #0d0d12; color: #ddd; border: 1px solid #333; border-radius: 4px; padding: 4px; }
+  .row { display: flex; align-items: center; gap: 8px; }
+</style>
+</head>
+<body>
+  <h1>ASCII Shader — Phase 0: core pipeline</h1>
+  <p class="sub">Drag the dashed frame over the fake “page”. The 100×100 monitor renders that region as ASCII every frame.
+     → <a href="/live.html" style="color:#7fb0e0">Phase 1: fullscreen live</a></p>
+
+  <div class="cols">
+    <div class="panel">
+      <div class="stage">
+        <canvas id="scene" width="480" height="360"></canvas>
+        <div id="frame"></div>
+      </div>
+      <div class="meta">fake page (animated canvas) — stand-in for real capture</div>
+    </div>
+
+    <div class="panel">
+      <canvas id="out" width="100" height="100"></canvas>
+      <div class="meta">ascii monitor · true size 100×100 <span id="fps">—</span></div>
+      <div class="meta" id="ramp"></div>
+
+      <label>cell size <span id="cellVal">10px</span></label>
+      <input type="range" id="cell" min="4" max="20" value="10">
+
+      <label>charset (auto-sorted by ink density)</label>
+      <div class="row">
+        <select id="preset">
+          <option value="ascii10" selected>ASCII 10</option>
+          <option value="ascii70">ASCII 70</option>
+          <option value="cyrillic">Кириллица</option>
+          <option value="blocks">Blocks ▁▂▃</option>
+        </select>
+        <input type="text" id="charset" value=" .:-=+*#%@" style="width:170px">
+      </div>
+
+      <label>color</label>
+      <div class="row">
+        <select id="mode">
+          <option value="0" selected>mono (terminal green)</option>
+          <option value="1">per-cell color</option>
+        </select>
+        <label class="row" style="margin:0"><input type="checkbox" id="invert"> invert</label>
+        <label class="row" style="margin:0"><input type="checkbox" id="zoom" checked> 2× zoom</label>
+      </div>
+      <label class="row" style="margin-top:10px"><input type="checkbox" id="textpass" checked>
+        text passthrough — реальный текст поверх мозаики (ротоскоп)</label>
+    </div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

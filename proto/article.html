@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Демо-статья — ASCII Times</title>
+<style>
+  body { margin: 0; background: #f4f1ea; color: #222; font: 17px/1.65 Georgia, serif; }
+  header { background: linear-gradient(120deg, #2b3a67, #6b2d5c); color: #fff; padding: 42px 24px 30px; }
+  header h1 { margin: 0 0 6px; font-size: 40px; letter-spacing: 1px; }
+  header p { margin: 0; opacity: .85; font-style: italic; }
+  main { max-width: 680px; margin: 0 auto; padding: 28px 20px 80px; }
+  h2 { font-size: 26px; margin: 34px 0 10px; }
+  .figure { height: 220px; border-radius: 10px; margin: 22px 0 6px;
+    background:
+      radial-gradient(circle at 72% 30%, #ffd27a 0 12%, transparent 13%),
+      radial-gradient(circle at 20% 80%, #7fe08a 0 18%, transparent 19%),
+      linear-gradient(160deg, #ff6a3d 0%, #5a2a4d 60%, #1d1e33 100%); }
+  .figure + figcaption { color: #777; font-size: 13px; margin-bottom: 18px; }
+  blockquote { border-left: 4px solid #6b2d5c; margin: 20px 0; padding: 6px 18px;
+    background: #ece5d8; font-style: italic; }
+  .balls { display: flex; gap: 14px; margin: 20px 0; }
+  .balls div { width: 64px; height: 64px; border-radius: 50%; }
+  code { background: #e5decf; padding: 1px 6px; border-radius: 4px; font-size: 15px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>ASCII Times</h1>
+    <p>Независимое издание о превращении пикселей в символы · The pixel-to-glyph gazette</p>
+  </header>
+  <main>
+    <h2>Весь интернет — это текст, просто он об этом ещё не знает</h2>
+    <p>Когда шейдер впервые превратил страницу в мозаику из глифов, никто не пострадал:
+       каждая ячейка изображения просто выбрала себе символ по яркости. Тёмным местам
+       достались точки и запятые, ярким — решётки и собаки. A quick brown fox jumps
+       over the lazy dog — и эта строка тоже переживёт преобразование без потерь,
+       потому что настоящий текст ротоскопируется как есть.</p>
+
+    <figure>
+      <div class="figure"></div>
+      <figcaption>Рис. 1. Процедурный закат: градиенты, которые станут глифами.</figcaption>
+    </figure>
+
+    <p>Кириллица, латиница, знаки препинания — всё это уже ASCII-совместимая фактура
+       страницы. <code>TreeWalker</code> обходит DOM, <code>getClientRects()</code>
+       сообщает, где стоит каждое слово, и слой сквозного текста рисует его поверх
+       мозаики моноширинным шрифтом.</p>
+
+    <blockquote>«Читаемость никогда не была целью — но раз уж она бесплатная,
+      возьмём две», — заявил анонимный фрагментный шейдер.</blockquote>
+
+    <h2>Интерактив</h2>
+    <p><a href="#dno">Обычная ссылка вниз страницы</a> — наведи, курсор станет pointer.</p>
+    <p>
+      <button id="btn" style="font-size:16px; padding:6px 14px">Кликов: <span id="hits">0</span></button>
+      <input id="inp" placeholder="напиши сюда" style="font-size:16px; padding:6px 10px; width:220px">
+    </p>
+    <script>
+      let h = 0;
+      window.__hits = 0;
+      document.getElementById('btn').addEventListener('click', () => {
+        document.getElementById('hits').textContent = ++h;
+        window.__hits = h;
+      });
+    </script>
+
+    <h2>Цвет как улика</h2>
+    <p>Ниже — три подозреваемых в деле о насыщенности. Их задача — проверить режим
+       per-cell color, где мозаика наследует цвет ячейки.</p>
+    <div class="balls">
+      <div style="background: radial-gradient(circle at 35% 30%, #ff9d9d, #c62828)"></div>
+      <div style="background: radial-gradient(circle at 35% 30%, #9dc9ff, #1954a8)"></div>
+      <div style="background: radial-gradient(circle at 35% 30%, #b6ffb0, #2b8a3e)"></div>
+    </div>
+
+    <p>Прокрутите страницу: слой текста обновляется на скролле, а фон продолжает
+       рендериться глифами в реальном времени. Scroll on — the mosaic follows.</p>
+
+    <h2>Мелкий шрифт</h2>
+    <p style="font-size:12px">Этот абзац набран двенадцатым кеглем, чтобы проверить нижнюю
+       границу читаемости сквозного текста. If you can read this, the rotoscope works.</p>
+    <p style="font-size:28px; font-weight:bold">А этот — крупный и жирный.</p>
+
+    <p>Конец демо-статьи. Ниже пустое пространство, чтобы было куда скроллить.</p>
+    <div style="height:60vh"></div>
+    <p id="dno">Дно страницы. Спасибо за прокрутку.</p>
+  </main>
+</body>
+</html>
