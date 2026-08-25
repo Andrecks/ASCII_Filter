@@ -304,7 +304,9 @@ function createWindow() {
   // capture exclusion AFTER all style setup — the direct Win32 call sticks on
   // the final style combo; ASCII_NO_PROTECT=1 disables for render diagnostics
   applyCaptureExclusion(win);
-  win.loadFile('overlay.html', { query: { mode: SELFTEST ? 'selftest' : (PROBE ? 'probe' : (OCRTEST ? 'ocrtest' : 'live')) } });
+  // absolute path: loadFile resolves relative paths against the app root, which
+  // differs between dev (desktop/) and the packaged build (resources/app/)
+  win.loadFile(path.join(__dirname, 'overlay.html'), { query: { mode: SELFTEST ? 'selftest' : (PROBE ? 'probe' : (OCRTEST ? 'ocrtest' : 'live')) } });
   // ready-to-show is NOT guaranteed (observed in the field: stalled first paint →
   // tray alive, window never shown). Show through every available path: the event,
   // a fallback timer, and the topmost guard; ensureShown is idempotent.

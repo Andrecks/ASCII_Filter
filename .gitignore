@@ -12,6 +12,7 @@ desktop/ocrtest.png
 
 # packaged builds and archives (electron-builder, extension packing)
 desktop/dist/
+desktop/dist-stage/
 desktop/out/
 *.zip
 *.rar

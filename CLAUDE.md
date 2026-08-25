@@ -95,9 +95,12 @@ NOT obvious from reading the code.
 
 ## Run & verify (desktop)
 
-- Run: `desktop\start.cmd`. The machine's global npx shim is BROKEN — never
-  `npx electron`; always the local `node_modules\electron\dist\electron.exe`.
-  If electron.exe is missing after npm install: `node node_modules/electron/install.js`.
+- Run: `desktop\start.cmd`. It SELF-BOOTSTRAPS on a fresh clone: missing binary →
+  npm install → `node node_modules/electron/install.js` fallback (postinstall
+  sometimes skips the download) → start; needs only Node.js on PATH. First spawn
+  after extraction can lag a few seconds (AV scan). The dev machine's global npx
+  shim is BROKEN — never `npx electron`; always the local
+  `node_modules\electron\dist\electron.exe`.
 - `--windowed` = small resizable window (dev). `--selftest` = windowed 60-frame
   run → selftest.json/.png. Expect ok:true, fps well over 60.
 - `--probe` = REAL fullscreen evidence run (~5 s, auto-quits) → probe.json +
@@ -118,6 +121,14 @@ NOT obvious from reading the code.
   touching the OCR path. Trap: PowerShell Get-Content decodes files as cp1251 by
   default — Cyrillic "mojibake" in artifacts is usually YOUR read, not the data;
   use the Read tool or -Encoding UTF8 before diagnosing.
+- Distributable: `node desktop/build-dist.js` → desktop/dist/ (portable exe +
+  zip; gitignored). The stage preserves the desktop/+proto/ sibling structure;
+  asar stays OFF (ocr-helper.ps1 must be a real file for PowerShell, koffi is
+  native, proto loads via file:// ESM). koffi's native binary lives in the
+  SEPARATE package @koromix/koffi-win32-x64 — ship BOTH via extraResources or
+  you get "Cannot find the native Koffi module". In main.js every loadFile MUST
+  use an absolute __dirname path — the app root differs inside the package.
+  Unsigned exe → one-time SmartScreen prompt on other machines.
 
 ## Testing conventions
 

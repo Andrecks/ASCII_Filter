@@ -393,10 +393,42 @@ instead of squeezing the whole screen.
       with WDA_EXCLUDEFROMCAPTURE are invisible to GDI screenshots on this
       build too — any on-screen visual verification MUST run with
       ASCII_NO_PROTECT=1 (the t10 methodology).
+- [x] Fresh-clone fix (field report from a second PC: "electron.exe not
+      found"): start.cmd now self-bootstraps — binary check → npm install →
+      node_modules/electron/install.js fallback (the known postinstall skip) →
+      start; clear message + pause when Node.js/npm is absent. Verified here by
+      renaming dist/ away: installer restored it and the app started (log);
+      first spawn after extraction can lag seconds — AV scans the fresh exe.
+      Second-PC prereq is ONLY Node.js; ru OCR needs the RU language pack.
 - [ ] USER: attach to the stubborn app that ignored fullscreen mode (tray →
       Привязка) → verify it cannot appear unfiltered through moves/resizes/
       fullscreen; windowed lens: drag the framed window around — it should
       show what's directly behind it, 1:1.
+
+### Phase 5.7 — Standalone distributable (nothing to install)  ✅ built
+User ask: a ready-to-run exe for other PCs — no Node.js, no npm, no steps.
+
+- [x] desktop/build-dist.js: stages the repo structure (desktop/ + proto/ as
+      siblings so the file:// ../proto imports keep working), generates a stage
+      package.json, runs the local electron-builder. asar OFF by design:
+      PowerShell must read ocr-helper.ps1 as a real file, koffi is native,
+      proto loads as plain file:// ES modules. npmRebuild off.
+- [x] Output (desktop/dist/, gitignored): ASCII-Shader-0.2.0-portable.exe
+      (89 MB single file; self-extracts on launch — first start takes ~5–15 s
+      under AV scan) + ASCII-Shader-0.2.0-win.zip (139 MB; unzip once → run
+      "ASCII Shader.exe", instant start — recommended) + win-unpacked/.
+- [x] Packaging field bugs fixed en route: (a) loadFile('overlay.html')
+      resolves against the APP ROOT, which differs between dev (desktop/) and
+      package (resources/app/) — must be absolute via __dirname; (b)
+      electron-builder's node_modules pruning stripped koffi's native — koffi
+      3.x keeps the .node in a SEPARATE platform package
+      @koromix/koffi-win32-x64; both packages now ship via extraResources,
+      bypassing the pruner entirely.
+- [x] Verified on this machine: packaged app runs with captureExclusion=ON and
+      the OCR helper alive (debug.log inside the package); portable stub
+      extracts and launches the app.
+- [ ] Later polish: app icon (.ico), code signing (unsigned exe triggers a
+      one-time SmartScreen prompt on other PCs), GitHub Releases upload.
 - [ ] Multi-display picker, settings persistence, packaged .exe (electron-builder)
       — later polish
 
