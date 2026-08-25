@@ -226,8 +226,9 @@ The OS-level overlay from the original concept (ShaderGlass-style). Electron by
 deliberate choice: reuses the exact WebGL pipeline + modules from proto/ unchanged;
 `setContentProtection(true)` = WDA_EXCLUDEFROMCAPTURE → overlay excluded from its
 own screen capture, no feedback loop; `setIgnoreMouseEvents(true)` = full click-
-through, input stays native. No DOM at OS level → no text rotoscope here (OCR still
-rejected); readability via smaller cells. Native C++/DXGI port stays a possible
+through, input stays native. No DOM at OS level → the text rotoscope runs on the
+Windows built-in OCR instead (Phase 5.5) — the one place OCR earned its slot; the
+browser variants keep the DOM source. Native C++/DXGI port stays a possible
 later optimization if capture latency ever matters.
 
 - [x] desktop/: main.js (fullscreen frameless click-through overlay on primary
@@ -281,9 +282,121 @@ later optimization if capture latency ever matters.
       Ctrl+Alt+D (video size, avg/max lum, gain, fps, track state, restarts);
       capture auto-restarts on track end and display-metrics-changed (games
       switching display mode no longer freeze the filter).
-- [ ] USER RETEST on ETS2 (start.cmd): night scene readable (auto-exposure), no
-      black screen, no unfiltered bottom strip, mosaic stays over the game, input
-      native; click-through, tray/hotkeys; Ctrl+Alt+D screenshot if anything's off
+- [x] FIELD BUG #2 (start.cmd → tray icon appears, window never does): the show
+      path hinged on a single unguaranteed event — `ready-to-show` didn't fire on
+      that boot (stalled first paint; same signature as the one blank --probe run
+      earlier), and the topmost guard was ALSO started inside that callback, so
+      the rescue path never armed. Fix: idempotent ensureShown() reachable three
+      ways (ready-to-show, 1.5s fallback timer, every guard tick — guard now
+      starts in whenReady); renderer crash → auto reloadIgnoringCache;
+      did-fail-load / unresponsive / child-process-gone and the show path+bounds
+      logged to desktop/debug.log (gitignored). Verified with a real start.cmd
+      launch: window visible 2560×1080, exstyle NOACTIVATE|LAYERED|TRANSPARENT|
+      TOPMOST, no NOREDIRECTIONBITMAP (protection intact); 4 stale processes from
+      the user's broken run found and killed.
+- [x] FIELD BUG #3 (window STILL never appeared): two independent faults were
+      masking each other. (1) disable-direct-composition — the earlier "fix" —
+      kills compositing of LAYERED (click-through) windows entirely: WS_VISIBLE
+      yes, zero pixels on screen; normal windows render fine, so selftest stayed
+      green. Reverted, DCOMP is ON again (ASCII_NO_DCOMP=1 for experiments).
+      (2) The ORIGINAL self-capture bug returned with DCOMP: Electron's
+      setContentProtection works on the framed window (affinity 17) but never
+      sticks on the overlay (0, any call order). Fix: direct user32
+      SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) via koffi (new dep) at
+      creation + re-pin each guard tick; per-step aff@ probes in debug.log.
+      Evidence chain: screenshot (dcomp on, ASCII_NO_PROTECT=1) = overlay renders
+      fullscreen; probe (protection on) = greenDominance 1.01,
+      selfCaptureSuspected FALSE, 140 fps; selftest 134 fps; on-screen
+      verification now uses real CopyFromScreen screenshots — WS_VISIBLE proved
+      nothing and had validated an invisible window in bug #2.
+- [x] UX rework (user request): app STARTS as a normal framed window — always
+      visibly appears, system cursor, no app menu; F11 (global hotkey, also in
+      tray) toggles fullscreen click-through overlay ↔ window by recreating the
+      window (frame/focusable are creation-only); --overlay starts in overlay
+      mode. Verified: F11 cycle log shows both directions with
+      captureExclusion=ON on every window.
+- [ ] USER RETEST: start.cmd → framed window with live ASCII appears; F11 →
+      whole screen becomes the mosaic (click-through, input native); F11 → back
+      to window. Then the ETS2 pass: night scene readable, no black screen,
+      mosaic over the game, tray/hotkeys; Ctrl+Alt+D + debug.log if anything's
+      off
+
+### Phase 5.5 — Desktop text rotoscope via Windows OCR  ✅ built (user test pending)
+Desktop has no DOM, and games expose no accessibility tree either — pixels are
+the only text source there. Windows 10 ships a native OCR engine
+(Windows.Media.Ocr — the PowerToys Text Extractor one): ru+en available on this
+machine, full 2560×1080 frame in ~60–220 ms, per-word bounding boxes. Fast
+enough for a change-driven rotoscope. OCR was rejected for the browser because
+the DOM is strictly better, not as dogma — here it earns its place.
+
+- [x] ocr-helper.ps1: persistent PowerShell child hosting the WinRT OcrEngine
+      (TryCreateFromUserProfileLanguages, ru active); stdin: image path →
+      stdout: one JSON line {ok, ms, words:[{t,x,y,w,h}]}; -Test mode measured
+      137→59 ms warm, Russian words with correct coords
+- [x] main.js: spawn/respawn with backoff, single-flight 'ocr' ipc (renderer
+      JPEG buffer → temp file → helper → parsed JSON), killed on quit,
+      lifecycle + stderr in debug.log
+- [x] overlay.js: 500 ms scheduler — 64×36 frame signature, re-OCR only when
+      the frame changed (diff>3.5), instant stale-text drop on scene cuts
+      (diff>30); words (h 7–200 px) → {text, x, baseline≈y+0.82h, size:h, w} →
+      the SHARED proto/textlayer.js painter (terminal ink + knockout halo) →
+      composited by the shader's uText pass; scale-aware (overlay 1:1,
+      windowed scaled down)
+- [x] Tray «Текст поверх мозаики» checkbox + Ctrl+Alt+T; debug line shows
+      ocr word count / ms / errors
+- [x] --ocrtest evidence mode: small inactive window (no focus steal),
+      full-res composite dumped to ocrtest.json/.png (gitignored). Result:
+      118 words, 219 ms, Cyrillic intact end-to-end (false alarm on mojibake
+      was Get-Content decoding UTF-8 as cp1251 — read artifacts as UTF-8);
+      composite shows mixed RU/EN desktop text readable in place over the
+      mosaic ✓
+- [ ] USER: real-world pass incl. ETS2 menus/HUD (stylized game fonts are
+      OCR's hard mode — expect partial pickup; cell size ↓ helps the rest)
+- [ ] Polish candidates parked: line-level grouping (calmer than per-word),
+      flicker damping between passes (match words by position), UIA text
+      source for a11y-friendly apps (exact strings, browser-grade), region
+      OCR (only changed tiles) if full-frame latency ever hurts
+
+### Phase 5.6 — Attach-to-app + windowed x-ray lens  ✅ built (user test pending)
+Two user asks: (1) bind the filter to ONE application so it can never be shown
+unfiltered — born from an app that out-toposted even the fullscreen overlay;
+(2) windowed mode should show only the region directly behind the window, 1:1,
+instead of squeezing the whole screen.
+
+- [x] Shared crop pipeline: the 60 Hz cursor poll now also carries the view
+      rect (DIPs) + display bounds; renderer maps them to video px (cropNow),
+      renders just the crop, and routes exposure sampling and the OCR text
+      painter through the same rect. Windowed = own content bounds (drag the
+      window = x-ray lens); attached = target bounds; overlay/selftest/probe/
+      ocrtest = full frame (baselines unchanged).
+- [x] Attachment WITHOUT a topmost war: the filter becomes an OWNED window of
+      the target (SetWindowLongPtr GWLP_HWNDPARENT via koffi) — Win32 keeps an
+      owned window directly above its owner in z-order, windowed or fullscreen,
+      so the target cannot be raised unfiltered; windows covering the target
+      correctly cover the filter too (no fake x-ray of occluded apps). 150 ms
+      follow tick: DWM extended-frame bounds → setBounds; minimize → hide;
+      restore → showInactive; close → auto-detach back to windowed;
+      moveTop nudge when target is foreground; exclusion re-pin every ~3 s.
+- [x] Tray submenu «Привязка к приложению»: live top-level window list
+      (GetTopWindow/GetWindow z-walk; filtered: visible, titled, not cloaked,
+      no toolwindows, not ours), «Отвязать», «Обновить список»;
+      ASCII_ATTACH="substring" env = auto-attach for tests/power users.
+- [x] FIELD FIX en route: Electron's setContentProtection on LAYERED windows
+      not only fails to set the affinity — it CLEARS one the direct call had
+      already set (fresh attached window regressed to 0). applyCaptureExclusion
+      now uses the direct user32 path exclusively whenever koffi is present;
+      the Electron call remains only as a no-koffi fallback. att-created/
+      ignoreMouse/owned probes: all readback=17.
+- [x] Verified live with a notepad target: mosaic lands exactly on the target
+      rect (uniform white field = 1:1 crop, not screen-squeeze), auto-detach on
+      target close in the log, affinity ON at every step. DISCOVERY: windows
+      with WDA_EXCLUDEFROMCAPTURE are invisible to GDI screenshots on this
+      build too — any on-screen visual verification MUST run with
+      ASCII_NO_PROTECT=1 (the t10 methodology).
+- [ ] USER: attach to the stubborn app that ignored fullscreen mode (tray →
+      Привязка) → verify it cannot appear unfiltered through moves/resizes/
+      fullscreen; windowed lens: drag the framed window around — it should
+      show what's directly behind it, 1:1.
 - [ ] Multi-display picker, settings persistence, packaged .exe (electron-builder)
       — later polish
 

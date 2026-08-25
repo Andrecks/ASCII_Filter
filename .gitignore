@@ -1,12 +1,14 @@
 # dependencies (electron binary lives here, ~200 MB — restored by `npm install`)
 node_modules/
 
-# generated test evidence (desktop --selftest / --probe runs)
+# generated test evidence (desktop --selftest / --probe / --ocrtest runs)
 desktop/selftest.json
 desktop/selftest.png
 desktop/probe.json
 desktop/probe.png
 desktop/probe-video.png
+desktop/ocrtest.json
+desktop/ocrtest.png
 
 # packaged builds and archives (electron-builder, extension packing)
 desktop/dist/
@@ -20,6 +22,7 @@ desktop/out/
 
 # logs
 npm-debug.log*
+desktop/debug.log
 
 # OS / editor junk
 Thumbs.db

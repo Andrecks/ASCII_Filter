@@ -2,10 +2,12 @@
 import { AsciiRenderer } from '../proto/ascii.js';
 import { PRESETS } from '../proto/presets.js';
 import { CursorLayer } from '../proto/cursor.js';
+import { paintTextLayer } from '../proto/textlayer.js';
 
 const MODE = new URLSearchParams(location.search).get('mode');
 const SELFTEST = MODE === 'selftest';
 const PROBE = MODE === 'probe';
+const OCRTEST = MODE === 'ocrtest';
 const REPORT_AT = SELFTEST ? 60 : 120; // probe waits ~2s so auto-exposure settles
 
 const outCanvas = document.getElementById('out');
@@ -79,7 +81,8 @@ const expoCtx = expoCanvas.getContext('2d', { willReadFrequently: true });
 
 function sampleExposure() {
   if (video.readyState < 2 || !video.videoWidth) return;
-  expoCtx.drawImage(video, 0, 0, expoCanvas.width, expoCanvas.height);
+  const c = cropNow(); // expose for what is actually shown, not the whole screen
+  expoCtx.drawImage(video, c.x, c.y, c.w, c.h, 0, 0, expoCanvas.width, expoCanvas.height);
   const d = expoCtx.getImageData(0, 0, expoCanvas.width, expoCanvas.height).data;
   let sum = 0, max = 0;
   for (let i = 0; i < d.length; i += 4) {
@@ -97,6 +100,64 @@ setInterval(sampleExposure, 250);
 const gainNow = () => (settings.exposure ? expo.gain : 1) * (settings.bias || 1);
 const gammaNow = () => (settings.exposure ? 0.6 : 1);
 
+// --- OCR text rotoscope ------------------------------------------------------
+// The desktop has no DOM, so the rotoscope text comes from the Windows built-in
+// OCR (main spawns ocr-helper.ps1). Re-recognize only when the frame actually
+// changes (cheap 64×36 signature diff); words render as terminal-style text with
+// a knockout halo through the shared proto/textlayer.js painter.
+const ocrState = { items: [], busy: false, lastSig: null, ms: 0, count: 0, err: '' };
+const sigCanvas = document.createElement('canvas');
+sigCanvas.width = 64;
+sigCanvas.height = 36;
+const sigCtx = sigCanvas.getContext('2d', { willReadFrequently: true });
+const grabCanvas = document.createElement('canvas');
+
+function frameSignature() {
+  sigCtx.drawImage(video, 0, 0, sigCanvas.width, sigCanvas.height);
+  return sigCtx.getImageData(0, 0, sigCanvas.width, sigCanvas.height).data;
+}
+
+function sigDiff(a, b) {
+  if (!a || !b) return 255;
+  let sum = 0, n = 0;
+  for (let i = 0; i < a.length; i += 16) { sum += Math.abs(a[i] - b[i]); n++; }
+  return sum / n;
+}
+
+async function ocrTick() {
+  if (!settings.ocrOn || ocrState.busy) { if (!settings.ocrOn) ocrState.items = []; return; }
+  if (video.readyState < 2 || !video.videoWidth) return;
+  const sig = frameSignature();
+  const diff = sigDiff(sig, ocrState.lastSig);
+  if (diff > 30) ocrState.items = []; // hard scene cut: drop stale text right away
+  if (diff < 3.5) return;             // frame unchanged since the last recognition
+  ocrState.busy = true;
+  try {
+    grabCanvas.width = video.videoWidth;
+    grabCanvas.height = video.videoHeight;
+    grabCanvas.getContext('2d').drawImage(video, 0, 0);
+    const blob = await new Promise((r) => grabCanvas.toBlob(r, 'image/jpeg', 0.75));
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const res = await window.desk.ocr(buf);
+    if (res && res.ok) {
+      const words = Array.isArray(res.words) ? res.words : (res.words ? [res.words] : []);
+      ocrState.items = words
+        .filter((w) => w.h >= 7 && w.h <= 200)
+        .map((w) => ({ text: w.t, x: w.x, y: w.y + w.h * 0.82, size: w.h, w: w.w }));
+      ocrState.ms = res.ms;
+      ocrState.count = ocrState.items.length;
+      ocrState.err = '';
+      ocrState.lastSig = sig;
+    } else {
+      ocrState.err = (res && res.error) || 'no result';
+      // 'busy' retries on the next tick; anything else waits for a frame change
+      if (ocrState.err !== 'busy') ocrState.lastSig = sig;
+    }
+  } catch (e) { ocrState.err = String(e && e.message || e); }
+  ocrState.busy = false;
+}
+setInterval(ocrTick, 500);
+
 function drawDebug() {
   const k = window.devicePixelRatio || 1;
   const track = stream && stream.getVideoTracks()[0];
@@ -105,7 +166,9 @@ function drawDebug() {
     ` | gain ${gainNow().toFixed(2)} (авто ${expo.gain.toFixed(2)} × ${(settings.bias || 1).toFixed(2)}) γ${gammaNow()}` +
     ` | ${(1000 / emaMs).toFixed(0)} fps` +
     ` | трек ${track ? track.readyState + (track.muted ? ' MUTED' : '') : '—'}` +
-    ` | рестартов ${recaptures}`;
+    ` | рестартов ${recaptures}` +
+    ` | ocr ${settings.ocrOn ? `${ocrState.count} слов ${ocrState.ms}мс${ocrState.err ? ' ERR:' + ocrState.err : ''}` : 'выкл'}` +
+    ` | вид ${settings.view}${(() => { const c = cropNow(); return c.w < video.videoWidth ? ` кроп ${Math.round(c.x)},${Math.round(c.y)} ${Math.round(c.w)}×${Math.round(c.h)}` : ''; })()}`;
   const fs = Math.round(13 * k);
   textCtx.font = `${fs}px Consolas, monospace`;
   textCtx.fillStyle = 'rgba(0,0,0,0.75)';
@@ -123,6 +186,12 @@ async function start() {
     if (cellChanged) applyCharset();
   });
   window.desk.onRecapture(() => recapture());
+  if (settings.view === 'windowed') {
+    // normal framed window: keep the real system cursor (overlay.html hides it
+    // for overlay mode); the ASCII cursor stays off — coords are screen-mapped
+    document.documentElement.style.cursor = 'default';
+    document.body.style.cursor = 'default';
+  }
   applyCharset();
   resize();
 
@@ -144,15 +213,56 @@ async function pollCursor() {
 }
 setInterval(pollCursor, 16);
 
+// Crop of the captured frame to render, in VIDEO px. Full frame in overlay mode;
+// in windowed mode — only the region directly behind the window (x-ray lens);
+// when attached — the target app's bounds. rect/disp arrive in DIPs with the
+// cursor poll; video is physical px, so scale by video/display ratio.
+function cropNow() {
+  const full = { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight };
+  const rect = cursorPos.rect, disp = cursorPos.disp;
+  if (!rect || !disp || !disp.width || settings.view === 'overlay') return full;
+  const kx = video.videoWidth / disp.width;
+  const ky = video.videoHeight / disp.height;
+  let x = (rect.x - disp.x) * kx;
+  let y = (rect.y - disp.y) * ky;
+  let w = rect.width * kx;
+  let h = rect.height * ky;
+  x = Math.max(0, Math.min(x, video.videoWidth - 2));
+  y = Math.max(0, Math.min(y, video.videoHeight - 2));
+  w = Math.max(2, Math.min(w, video.videoWidth - x));
+  h = Math.max(2, Math.min(h, video.videoHeight - y));
+  return { x, y, w, h };
+}
+
 let frames = 0, emaMs = 16.7, last = performance.now();
 function tick(t) {
   emaMs = emaMs * 0.92 + (t - last) * 0.08;
   last = t;
   if (video.readyState >= 2 && video.videoWidth) {
-    const textOn = settings.cursorOn || settings.debug;
+    // ocrtest: tiny window on screen, but composite at FULL capture resolution
+    // so the dumped PNG shows the rotoscoped text 1:1
+    if (OCRTEST && outCanvas.width !== video.videoWidth) {
+      outCanvas.width = video.videoWidth;
+      outCanvas.height = video.videoHeight;
+      textCanvas.width = video.videoWidth;
+      textCanvas.height = video.videoHeight;
+    }
+    const crop = cropNow();
+    const cursorWanted = settings.cursorOn && settings.view === 'overlay';
+    const ocrActive = settings.ocrOn && ocrState.items.length > 0;
+    const textOn = cursorWanted || settings.debug || ocrActive;
     if (textOn) {
-      textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
-      if (settings.cursorOn) {
+      if (ocrActive) {
+        // items are in captured-frame px; painter clears the canvas itself and
+        // maps source→canvas through the crop offset + scale
+        paintTextLayer(textCtx, ocrState.items, { x: crop.x, y: crop.y }, {
+          scaleX: outCanvas.width / crop.w,
+          scaleY: outCanvas.height / crop.h,
+        });
+      } else {
+        textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
+      }
+      if (cursorWanted) {
         // cursor pos arrives in display DIPs; canvas is physical px
         const k = (window.devicePixelRatio || 1);
         cursor.update({ x: cursorPos.x * k, y: cursorPos.y * k, css: 'default' });
@@ -160,8 +270,7 @@ function tick(t) {
       }
       if (settings.debug) drawDebug();
     }
-    renderer.render(video, video.videoWidth, video.videoHeight,
-      { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight }, {
+    renderer.render(video, video.videoWidth, video.videoHeight, crop, {
         colorMode: settings.colorMode,
         invert: settings.invert,
         gain: gainNow(),
@@ -170,9 +279,10 @@ function tick(t) {
         bg: [0.02, 0.045, 0.02],
         textLayer: textOn ? textCanvas : null,
       });
-    if (SELFTEST || PROBE) {
+    if (SELFTEST || PROBE || OCRTEST) {
       frames++;
-      if (frames === REPORT_AT) {
+      const ocrDone = OCRTEST && ((ocrState.count > 0 && frames > 30) || frames > 800);
+      if ((!OCRTEST && frames === REPORT_AT) || ocrDone) {
         const gl = renderer.gl;
         const w = outCanvas.width, h = outCanvas.height;
         const px = new Uint8Array(w * h * 4);
@@ -216,6 +326,12 @@ function tick(t) {
             gainApplied: +gainNow().toFixed(2),
             recaptures,
             ...(feedback || {}),
+            ...(OCRTEST ? {
+              ocrWords: ocrState.count,
+              ocrMs: ocrState.ms,
+              ocrErr: ocrState.err,
+              ocrSample: ocrState.items.slice(0, 10).map((i) => i.text),
+            } : {}),
           },
           png: outCanvas.toDataURL('image/png'),
           videoPng,

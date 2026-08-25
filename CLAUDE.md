@@ -32,17 +32,47 @@ NOT obvious from reading the code.
 - `desktop/` — Electron overlay (Windows-only concerns live here).
   - `overlay.js` imports `../proto/*.js` directly (file:// ES modules, no bundling)
     → desktop/ MUST remain a sibling of proto/.
-  - `main.js` — ALL policy: window flags, capture handler, tray, hotkeys, guard.
+  - `main.js` — ALL policy: window flags, capture handler, tray, hotkeys, guard,
+    OCR helper lifecycle.
+  - `ocr-helper.ps1` — persistent PowerShell child wrapping the Windows built-in
+    OCR (Windows.Media.Ocr): image path in, one JSON line of per-word boxes out.
+    This is the desktop rotoscope's text source (no DOM at OS level; ~60–220 ms
+    per 2560×1080 frame, ru+en). overlay.js re-OCRs only on frame change and
+    feeds the words to the same proto/textlayer.js painter the browser uses.
 
 ## Desktop: load-bearing and easy to break
 
-- `disable-direct-composition` is CRITICAL (main.js top). With DCOMP on, Chromium
-  windows carry WS_EX_NOREDIRECTIONBITMAP and SetWindowDisplayAffinity (content
-  protection) SILENTLY fails → the overlay captures ITSELF → hall-of-mirrors decay
-  to a black screen (the ETS2 field bug; measured GetWindowDisplayAffinity=0 while
-  the API reported success). Env escapes: ASCII_KEEP_DCOMP=1, ASCII_SOFT=1
-  (software rendering). If you ever touch window flags/capture, re-verify with
-  --probe (below).
+- Startup UX: the app STARTS as a normal framed window (always visibly appears;
+  system cursor; no app menu). F11 (global) toggles fullscreen click-through
+  overlay ↔ window — by RECREATING the window (frame/focusable are creation-only
+  in Electron); the renderer reloads and recaptures promptlessly. --overlay CLI
+  starts straight in overlay mode.
+- Capture self-exclusion (anti hall-of-mirrors) is a DIRECT Win32 call:
+  SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) via koffi (dependency).
+  NEVER route it through Electron's setContentProtection when koffi exists: on
+  layered (click-through) windows that call not only fails — it CLEARS an
+  affinity the direct call already set (field-measured twice). The direct call
+  succeeds at creation, survives ignoreMouse/alwaysOnTop/owner-change/show, and
+  is re-pinned by the guard (overlay) or the attach tick. Per-step `aff@...`
+  probes go to debug.log — expect readback=17 everywhere; captureExclusion=ON in
+  the shown line. Side effect: WDA windows are invisible to GDI screenshots on
+  this build too, so on-screen visual checks must run with ASCII_NO_PROTECT=1.
+- View modes: windowed (default; framed window = x-ray LENS — renders only the
+  region behind itself, 1:1), overlay (F11; fullscreen click-through), attached
+  (tray «Привязка к приложению» or ASCII_ATTACH="substr" env): the filter
+  becomes an OWNED window of the target (GWLP_HWNDPARENT) — Win32 keeps it
+  right above the owner in z-order with no topmost war; 150 ms tick follows
+  bounds/minimize/close (close = auto-detach). The crop rect rides in the 60 Hz
+  cursor poll (rect+disp in DIPs → cropNow() → video px); exposure and the OCR
+  painter use the same crop.
+- NEVER ship `disable-direct-composition`: with DCOMP off, LAYERED (click-through)
+  windows stop compositing AT ALL — window "shown", zero pixels on screen (that
+  was field bug: tray icon only). Normal windows still render, so selftest stays
+  green while overlay is invisible — trap. Diagnostic envs: ASCII_NO_DCOMP=1,
+  ASCII_SOFT=1 (software rendering), ASCII_NO_PROTECT=1 (protection off, lets a
+  GDI screenshot prove on-screen rendering). If you touch window flags/capture,
+  re-verify with --probe AND a real CopyFromScreen screenshot (WS_VISIBLE alone
+  proves nothing — a window can be "shown" and paint nothing).
 - Input passthrough is by construction, not by forwarding: `focusable:false`
   (WS_EX_NOACTIVATE — raises can never steal focus) + `setIgnoreMouseEvents(true)`.
   No OS-level text rotoscope (no DOM at OS level; OCR still rejected).
@@ -77,6 +107,17 @@ NOT obvious from reading the code.
   window/capture change: run probe AND view probe-video.png — it must show the
   real desktop, NEVER a green glyph field.
 - Selftest/probe artifacts are gitignored — regenerate, don't commit.
+- `desktop/debug.log` (gitignored) records every start (mode/flags), which path
+  showed the window (ready-to-show / timer / guard), crashes, failed loads, OCR
+  helper lifecycle. First thing to read on any "it didn't appear / it died" field
+  report. The window show path is deliberately triple-redundant — never collapse
+  it back to a single ready-to-show handler (field bug #2 in PLAN Phase 5).
+- `--ocrtest` = OCR pipeline evidence run: small inactive window, dumps
+  ocrtest.json (word count/ms/sample) + ocrtest.png (full-res composite — the
+  rotoscoped text must be readable over the mosaic). Verify with it after
+  touching the OCR path. Trap: PowerShell Get-Content decodes files as cp1251 by
+  default — Cyrillic "mojibake" in artifacts is usually YOUR read, not the data;
+  use the Read tool or -Encoding UTF8 before diagnosing.
 
 ## Testing conventions
 
