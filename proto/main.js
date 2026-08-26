@@ -18,6 +18,7 @@ const state = {
   colorMode: 0,
   invert: false,
   textPass: true,
+  matrix: false, // easter egg: Matrix rain, toggled by the M key
 };
 
 // text passthrough layer — same size as output, composited by the shader
@@ -65,6 +66,17 @@ zoomInput.addEventListener('change', () => {
 });
 outCanvas.classList.toggle('zoom2x', zoomInput.checked);
 
+// easter egg: the M key toggles Matrix rain. Match by physical code OR by the
+// letter (m / Russian ь on the same key) — on-screen keyboards, remote desktops
+// and synthesized input often ship an empty e.code
+addEventListener('keydown', (e) => {
+  const isM = e.code === 'KeyM' || /^[mь]$/i.test(e.key || '');
+  if (!isM || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  state.matrix = !state.matrix;
+});
+
 // --- draggable 100x100 source frame ---
 function placeFrame() {
   frame.style.left = state.crop.x + 'px';
@@ -96,6 +108,8 @@ function renderFrame(t) {
     ink: [0.55, 1.0, 0.55],
     bg: [0.02, 0.045, 0.02],
     textLayer: state.textPass ? textCanvas : null,
+    matrix: state.matrix,
+    time: t / 1000,
   });
 }
 

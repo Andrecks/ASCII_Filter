@@ -11,12 +11,27 @@
 //   ASCII-Shader-<ver>-win.zip      — unzip once, run "ASCII Shader.exe" (faster start)
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 
 const desktop = __dirname;
 const root = path.dirname(desktop);
 const stage = path.join(desktop, 'dist-stage');
 const out = path.join(desktop, 'dist');
+
+// Self-bootstrap like start.cmd: on a fresh clone node_modules is absent, so
+// install before staging (koffi is copied from node_modules into the stage,
+// and electron-builder is the build tool itself).
+if (!fs.existsSync(path.join(desktop, 'node_modules', 'electron-builder', 'package.json'))) {
+  console.log('electron-builder not installed - running npm install...');
+  execSync('npm install --no-audit --no-fund', { cwd: desktop, stdio: 'inherit' });
+}
+
+// Resolve the CLI entry from electron-builder's own bin field instead of
+// hardcoding cli.js — the filename is the package's business, not ours.
+const ebDir = path.join(desktop, 'node_modules', 'electron-builder');
+const ebPkg = JSON.parse(fs.readFileSync(path.join(ebDir, 'package.json'), 'utf8'));
+const ebBin = typeof ebPkg.bin === 'string' ? ebPkg.bin : ebPkg.bin['electron-builder'];
+const ebCli = path.join(ebDir, ebBin);
 
 const pkg = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8'));
 const electronVersion = pkg.devDependencies.electron.replace(/^[~^]/, '');
@@ -25,7 +40,7 @@ console.log('staging -> ' + stage);
 fs.rmSync(stage, { recursive: true, force: true });
 fs.mkdirSync(path.join(stage, 'desktop'), { recursive: true });
 
-for (const f of ['main.js', 'preload.js', 'overlay.js', 'overlay.html', 'ocr-helper.ps1']) {
+for (const f of ['main.js', 'preload.js', 'overlay.js', 'overlay.html', 'hotkeys.html', 'ocr-helper.ps1']) {
   fs.copyFileSync(path.join(desktop, f), path.join(stage, 'desktop', f));
 }
 fs.cpSync(path.join(root, 'proto'), path.join(stage, 'proto'), {
@@ -64,8 +79,7 @@ fs.writeFileSync(path.join(stage, 'package.json'), JSON.stringify({
 
 console.log('building (electron-builder)...');
 execFileSync(process.execPath,
-  [path.join(desktop, 'node_modules', 'electron-builder', 'cli.js'),
-   '--win', '--publish', 'never', '--projectDir', stage],
+  [ebCli, '--win', '--publish', 'never', '--projectDir', stage],
   { stdio: 'inherit' });
 
 console.log('\ndone -> ' + out);

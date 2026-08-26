@@ -42,7 +42,21 @@ const state = {
   domItems: null,
   cursorOn: true,
   hideNative: false,
+  matrix: false, // easter egg: Matrix rain, toggled by the M key
 };
+
+// easter egg: the M key toggles Matrix rain (physical code OR letter m/ь —
+// synthesized/OSK input often has empty e.code); ignored while typing in
+// inputs or when the canvas is forwarding keys to the mirrored page (split)
+addEventListener('keydown', (e) => {
+  const isM = e.code === 'KeyM' || /^[mь]$/i.test(e.key || '');
+  if (!isM || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable ||
+            t === outCanvas)) return;
+  state.matrix = !state.matrix;
+  note(state.matrix ? 'MATRIX ON' : 'matrix off');
+});
 
 const cursor = new CursorLayer();
 const chip = $('chip');
@@ -345,6 +359,8 @@ function tick(t) {
         ink: [0.55, 1.0, 0.55],
         bg: [0.02, 0.045, 0.02],
         textLayer: layerOn ? textCanvas : null,
+        matrix: state.matrix,
+        time: t / 1000,
       });
       fpsEl.textContent = `${(1000 / emaMs).toFixed(0)} fps · ${outCanvas.width}×${outCanvas.height} · ` +
         `${Math.floor(outCanvas.width / state.cell)}×${Math.floor(outCanvas.height / state.cell)} ячеек` +
@@ -442,6 +458,7 @@ window.__live = {
           colorMode: state.colorMode, invert: state.invert,
           ink: [0.55, 1.0, 0.55], bg: [0.02, 0.045, 0.02],
           textLayer: (items || useCursor) ? textCanvas : null,
+          matrix: state.matrix, time: t / 1000,
         });
     }
     return this.stats(rect);

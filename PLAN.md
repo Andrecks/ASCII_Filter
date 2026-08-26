@@ -427,15 +427,126 @@ User ask: a ready-to-run exe for other PCs — no Node.js, no npm, no steps.
 - [x] Verified on this machine: packaged app runs with captureExclusion=ON and
       the OCR helper alive (debug.log inside the package); portable stub
       extracts and launches the app.
+- [x] Field bug (c): with desktop/node_modules absent (fresh checkout) the
+      build died on the hardcoded node_modules/electron-builder/cli.js path —
+      start.cmd self-bootstraps but build-dist.js didn't. Fix: build-dist.js
+      now runs npm install itself when electron-builder is missing and
+      resolves the CLI entry from electron-builder's own package.json bin
+      field. Verified end-to-end from empty node_modules: both artifacts
+      built, packaged exe --selftest ok:true 58.3 fps, gain 1.67, koffi loads.
 - [ ] Later polish: app icon (.ico), code signing (unsigned exe triggers a
       one-time SmartScreen prompt on other PCs), GitHub Releases upload.
 - [ ] Multi-display picker, settings persistence, packaged .exe (electron-builder)
       — later polish
 
+### Phase 5.8 — Multi-display capture + Matrix easter egg  ✅ built
+User field report: on a second monitor the filter still shows monitor 1 — in
+windowed mode after dragging the window over, AND when attached to an app there.
+
+- [x] Root cause: `display` was set to getPrimaryDisplay() once at window
+      creation and re-set to primary on display-metrics-changed; the capture
+      handler picks the source by display.id, and cursor/crop math uses
+      display.bounds — so every view mode captured monitor 1 forever.
+- [x] Fix (desktop/main.js): `display` now follows the window — syncDisplayTo()
+      on debounced framed-window 'move', on every attachTick bounds change, on
+      F11 (overlay opens on the window's current monitor), and attachTo() seeds
+      it from the target's monitor before the first frame. Each switch logs
+      `display switch -> id=...` and sends 'recapture'; display-metrics-changed
+      keeps the SAME display (primary only if unplugged). Capture handler got a
+      monitor-index fallback for setups where source.display_id is empty, and
+      logs the picked source (field diagnosis).
+- [x] Verified end-to-end on the dev machine (1280×800 primary + 1920×1080
+      secondary at -1920,0): started windowed → log shows capture of "Экран 1"
+      (id 3403897437); SetWindowPos to -1500,120 → 'display switch ->
+      id=2661095462' + new capture line "Экран 2" with matching display_id.
+      --selftest regression: ok:true, 57 fps.
+- [ ] USER: drag the window to the second monitor — the lens must show what's
+      behind it THERE; F11 there — overlay covers that monitor; «Привязка» to an
+      app on the second monitor — filter shows that app. (Log evidence already
+      green; this is the eyes-on confirmation.)
+- [x] Matrix rain easter egg, shared shader (proto/ascii.js: uMatrix/uTime):
+      per-column drops, random flickering glyphs (blank slot excluded), trail
+      fades upward, head cell always lit + whitened; trail brightness carries
+      scene luminance so the image ghosts through. Verified by pixel probe on
+      the phase-0 page: per-cell max-green profile rises top→bottom
+      (59→…→211), head brightest; animation advances with time; toggle clean.
+      Binds: desktop Ctrl+Alt+M (global; bare M would eat the key system-wide —
+      overlay never has keyboard focus; deliberately NOT in the tray), web
+      pages + extension: physical KeyM outside inputs/no modifiers (ext v0.2.3).
+- [x] Field report "бинд M не работает" → verified the whole chain live and
+      hardened it: (a) desktop hotkey PROVEN working — injected Ctrl+Alt+M via
+      keybd_event → debug.log 'matrix -> on'/'off'; render PROVEN — selftest
+      with new diagnostic env ASCII_MATRIX=1 renders real rain (selftest.png,
+      litFrac 0.008 vs ~0.21 mosaic); (b) real bug found in the web listener:
+      it required e.code==='KeyM', but e.code arrives EMPTY from on-screen
+      keyboards / remote desktop / synthesized input (caught via CDP key
+      injection) — now also matches the letter itself (m/ь, RU layout's key);
+      (c) hotkey registration failures now logged ('hotkey REGISTER FAILED' —
+      register() silently returns false when another app owns the combo), and
+      every matrix toggle logs. Ext bumped to v0.2.4.
+- [x] Field follow-up "по бинду не работает" → configurable hotkeys + tray
+      access (v0.2.2): «Матрица» checkbox in the tray (no hotkey needed at
+      all), «Горячие клавиши…» opens desktop/hotkeys.html — an editor listing
+      every action (single HOTKEY_ACTIONS registry in main.js) where a row is
+      rebound by clicking «изменить» and pressing the combo; bindings persist
+      in userData/hotkeys.json, registration failures («занято другой
+      программой») show per-row, global binds SUSPEND while capturing so the
+      pressed combo reaches the editor, tray labels render live binds.
+      ASCII_HOTKEYS=1 auto-opens the editor (diagnostics). Verified: editor
+      opens + rows render over real IPC (screenshot); capture logic (lone
+      modifier wait, RU layout Ctrl+Alt+M, F9, num5, bare M, Esc cancel)
+      verified against a stubbed IPC in the browser pane; full in-Electron
+      keystroke e2e was impractical — the user was actively using the machine
+      (their own Ctrl+Alt+M press landed in debug.log as 'matrix -> on',
+      incidentally proving the hotkey fires on their setup).
+- [x] Matrix v2 — adaptive (user: "чтобы передавали суть того, что за
+      фильтром"): the trail now keeps the LUMINANCE-mapped glyph of the cell
+      (dark cells stay empty, bright cells dense — the mosaic essence), drops
+      only modulate brightness; only the 1-cell head scrambles randomly (the
+      "decoding" look). Density up: 3 independent drops/column, speed
+      8–22 cells/s, trails 10–26 cells, faint 0.08 ambient keeps the image
+      ghost-readable between drops. Verified on a synthetic half-black /
+      half-white frame: white side 67–73% cells lit (mean ~98), black side
+      6–16% (heads only) — the image passes through; desktop selftest PNG
+      shows the taskbar readable as a glyph band through the rain. Same grid
+      and same glyph ramp as every other mode by construction. Ext v0.2.5,
+      desktop v0.2.3.
+- [x] Matrix settings exposed (desktop v0.2.4, ext v0.2.6): shader takes
+      uMatrixP vec4 (drops/column 1..4, speed mul, trail mul, ambient). Tray
+      «Матрица» became a submenu: Включена + Плотность (Редкий/Обычный/
+      Плотный/Ливень) + Скорость (Медленно/Обычно/Быстро) + Хвосты (Короткие/
+      Обычные/Длинные) + Фон (Выкл/Слабый/Заметный). Ext panel: «матрица»
+      checkbox (synced with the M key) + density/speed selects. Measured, each
+      knob monotone: drops 1/3/4 -> 6/18/23% lit px; len 0.6x -> 15%; speed
+      0.5x vs 1.6x -> 12% vs 33% px changed per 0.3s; ambient 0/0.08/0.16 ->
+      16/46/57% dim px. Live-mode smoke: tray submenu builds, no crash.
+- [x] Matrix v3 — base-mosaic model (user: v2 still didn't convey the image;
+      their proposal adopted verbatim): matrix = the NORMAL mosaic at a dim
+      base brightness (uMatrixP.w, default 0.35) with drops LIGHTING cells up
+      to full — bright symbols raining over a dark copy of the image. Dropped
+      the trail's extra lum scaling (glyph already encodes luminance; the
+      double-dimming was hiding the picture). Tray «Фон между каплями» became
+      «Яркость фоновой мозаики»: Выкл (только дождь) / Тусклая 0.2 / Обычная
+      0.35 / Яркая 0.5. Gradient-stand correlation matrix-vs-normal rose
+      0.19 -> 0.42 full-frame (rain is uncorrelated by nature and dilutes the
+      stat); desktop selftest PNG: windows/taskbar readable through the rain.
+      Desktop v0.2.5, ext v0.2.7.
+- [ ] USER: tray → «Матрица» submenu: toggle + Плотность/Скорость/Хвосты +
+      «Яркость фоновой мозаики» (applies instantly; raise it if the image
+      should show more). «Горячие клавиши…» → rebind matrix to bare M if
+      wanted (warning: global). Extension (panel header 0.2.7): «матрица»
+      checkbox + selects, M key flips the checkbox. Eyeball: dim normal
+      mosaic must be readable everywhere, bright symbols fall over it.
+
 ## Phase 4 — Polish & ship
 - [ ] Resizable window, remembered position/size (storage)
 - [ ] Presets: charset packs, green/amber terminal, per-cell color; optional Sobel
       edge-glyph mode (| / — \)
+  - [x] japanese preset (v0.2.2): 39 glyphs, punctuation -> sparse kanji ->
+        kana -> dense kanji (鬱/響). Relies on the atlas auto-fit (fullwidth
+        glyphs shrunk to cell) + ink sort; measured in-page: 39 distinct ink
+        levels, smooth 0->0.482 ramp, no font-fallback tofu. Wired into all
+        four UIs (index/live selects, ext panel, desktop tray).
 - [ ] Performance knobs: fps cap, cell size, pause-when-hidden
 - [ ] Options page, icons, store-ready zip
 - Test: 10-minute soak on heavy site — no leaks (memory flat), stable fps.

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Горячие клавиши</title>
+<style>
+  body { margin: 0; background: #0b100b; color: #cfe8cf; font: 14px/1.5 'Segoe UI', sans-serif; user-select: none; }
+  h1 { font: 600 16px 'Segoe UI', sans-serif; color: #7fe08a; margin: 14px 16px 4px; }
+  p.hint { margin: 0 16px 8px; font-size: 12px; color: #7a8f7a; }
+  #status { font-size: 12px; color: #ffe28a; min-height: 18px; margin: 0 16px 4px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 7px 12px; border-top: 1px solid #1c241c; }
+  td.k { text-align: right; white-space: nowrap; }
+  td.a { width: 92px; text-align: right; }
+  kbd { background: #162016; border: 1px solid #2c3a2c; border-radius: 4px; padding: 2px 8px;
+        font: 12px Consolas, monospace; color: #9fe8a8; }
+  button { background: #162016; color: #cfe8cf; border: 1px solid #2c3a2c; border-radius: 4px;
+           padding: 3px 10px; cursor: pointer; font: 12px 'Segoe UI', sans-serif; }
+  button:hover, button:focus { border-color: #7fe08a; outline: none; }
+  button.rec { background: #2c2a16; color: #ffe28a; border-color: #ffe28a; }
+  .err { color: #ff9d9d; font-size: 11px; display: block; }
+  #foot { display: flex; justify-content: flex-end; padding: 10px 16px 14px; }
+</style>
+</head>
+<body>
+  <h1>Горячие клавиши</h1>
+  <p class="hint">Нажми «изменить», затем новую комбинацию (Esc — отмена). Бинды глобальные:
+    комбинация без модификаторов (например, просто M) будет перехватываться во всех
+    программах, пока фильтр запущен.</p>
+  <div id="status"></div>
+  <table id="rows"></table>
+  <div id="foot"><button id="reset" tabindex="-1">Сбросить по умолчанию</button></div>
+<script>
+  const rowsEl = document.getElementById('rows');
+  const statusEl = document.getElementById('status');
+  let capturing = null; // { id, btn }
+
+  // KeyboardEvent -> Electron accelerator; null while only modifiers are down
+  function accelFrom(e) {
+    const mods = [];
+    if (e.ctrlKey) mods.push('Control');
+    if (e.altKey) mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    if (e.metaKey) mods.push('Super');
+    const c = e.code;
+    let key = null;
+    if (/^Key[A-Z]$/.test(c)) key = c.slice(3);
+    else if (/^Digit\d$/.test(c)) key = c.slice(5);
+    else if (/^F\d{1,2}$/.test(c)) key = c;
+    else if (/^Numpad\d$/.test(c)) key = 'num' + c.slice(6);
+    else key = ({
+      ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+      Space: 'Space', Enter: 'Enter', Backspace: 'Backspace', Delete: 'Delete',
+      Insert: 'Insert', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+      Tab: 'Tab', Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[',
+      BracketRight: ']', Semicolon: ';', Quote: "'", Comma: ',', Period: '.',
+      Slash: '/', Backslash: '\\',
+    })[c] || null;
+    return key ? [...mods, key].join('+') : null;
+  }
+
+  function stopCapture(msg) {
+    if (!capturing) return;
+    capturing.btn.classList.remove('rec');
+    capturing.btn.textContent = 'изменить';
+    capturing = null;
+    statusEl.textContent = msg || '';
+    window.deskHotkeys.capture(false);
+  }
+
+  function startCapture(id, btn) {
+    stopCapture();
+    capturing = { id, btn };
+    btn.classList.add('rec');
+    btn.textContent = 'нажми…';
+    statusEl.textContent = 'Жду комбинацию (Esc — отмена)';
+    window.deskHotkeys.capture(true); // main suspends global binds while we listen
+  }
+
+  async function refresh() {
+    const list = await window.deskHotkeys.list();
+    rowsEl.innerHTML = '';
+    for (const a of list) {
+      const tr = document.createElement('tr');
+      const name = document.createElement('td');
+      name.textContent = a.label;
+      if (a.error) {
+        const err = document.createElement('span');
+        err.className = 'err';
+        err.textContent = '⚠ ' + a.error;
+        name.appendChild(err);
+      }
+      const cur = document.createElement('td');
+      cur.className = 'k';
+      const kbd = document.createElement('kbd');
+      kbd.textContent = a.pretty || a.accel;
+      cur.appendChild(kbd);
+      const act = document.createElement('td');
+      act.className = 'a';
+      const btn = document.createElement('button');
+      btn.textContent = 'изменить';
+      btn.addEventListener('click', () => startCapture(a.id, btn));
+      act.appendChild(btn);
+      tr.append(name, cur, act);
+      rowsEl.appendChild(tr);
+    }
+  }
+
+  window.addEventListener('keydown', async (e) => {
+    if (!capturing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { stopCapture('Отменено.'); return; }
+    const accel = accelFrom(e);
+    if (!accel) return; // a lone modifier — keep waiting for the full combo
+    const { id } = capturing;
+    const res = await window.deskHotkeys.set(id, accel);
+    stopCapture(res.ok ? '' : '⚠ ' + (res.error || 'не удалось назначить'));
+    refresh();
+  }, { capture: true });
+
+  window.addEventListener('blur', () => stopCapture());
+  document.getElementById('reset').addEventListener('click', async () => {
+    stopCapture();
+    await window.deskHotkeys.reset();
+    statusEl.textContent = 'Сброшено по умолчанию.';
+    refresh();
+  });
+  refresh();
+</script>
+</body>
+</html>

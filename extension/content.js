@@ -28,9 +28,16 @@ uniform int   uColorMode;    // 0 = mono ink, 1 = per-cell color
 uniform vec3  uInk;
 uniform vec3  uBg;
 uniform float uInvert;       // 0 or 1
+uniform float uGain;         // exposure multiplier, 1 = neutral (dark-scene lift)
+uniform float uGamma;        // tone-curve exponent, 1 = linear
 uniform sampler2D uText;     // text passthrough layer (output-sized, straight alpha)
 uniform float uTextOn;       // 0 or 1
+uniform float uMatrix;       // Matrix-rain easter egg, 0 or 1
+uniform float uTime;         // seconds (pre-wrapped on CPU to keep fp32 precision)
+uniform vec4  uMatrixP;      // rain params: drops/column (1..4), speed mul, trail mul, ambient
 out vec4 outColor;
+
+float hash1(float n) { return fract(sin(n) * 43758.5453); }
 
 void main() {
   vec2 px = gl_FragCoord.xy;
@@ -39,12 +46,48 @@ void main() {
   vec2 suv = uRectOrigin + cellCenter * uRectSize;           // into source crop
   vec3 c = textureLod(uSrc, suv, uLod).rgb;
   float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  lum = pow(clamp(lum * uGain, 0.0, 1.0), uGamma);
   lum = mix(lum, 1.0 - lum, uInvert);
   float gi = clamp(floor(lum * uGlyphCount), 0.0, uGlyphCount - 1.0);
+  float bright = 1.0;
+  vec3 headTint = vec3(0.0);
+  if (uMatrix > 0.5) {
+    // Matrix rain over the NORMAL mosaic: the regular luminance-mapped frame
+    // stays fully readable at a dim base level (uMatrixP.w), and drops LIGHT
+    // CELLS UP to full brightness as they fall — bright symbols raining over
+    // a dark copy of the image. Glyphs are the image's own everywhere; only
+    // the 1-cell head scrambles (the classic "decoding" look).
+    float rows = max(1.0, floor(uOutSize.y / uCell.y));
+    float rowTop = rows - 1.0 - cellIdx.y;                   // 0 at the top edge
+    float m = 0.0;
+    float isHead = 0.0;
+    for (int k = 0; k < 4; k++) {
+      if (float(k) >= uMatrixP.x) break;                     // density setting
+      float ch = hash1(cellIdx.x * 127.1 + float(k) * 51.7); // per-drop phase
+      float speed = mix(8.0, 22.0, fract(ch * 7.31)) * uMatrixP.y; // cells/sec
+      float len = max(3.0, mix(10.0, 26.0, fract(ch * 3.77)) * uMatrixP.z);
+      float head = mod(uTime * speed + ch * 331.7, rows + len);
+      float d = head - rowTop;                               // 0 at head, grows up the trail
+      if (d >= 0.0 && d < len) m = max(m, pow(1.0 - d / len, 1.6));
+      if (d >= 0.0 && d < 1.0) isHead = 1.0;
+    }
+    if (isHead > 0.5) {
+      float g = hash1(dot(vec2(cellIdx.x, rowTop * 0.37 + floor(uTime * 12.0)),
+                          vec2(12.9898, 78.233)));
+      gi = 1.0 + floor(g * (uGlyphCount - 1.0));
+      bright = 1.0;
+      headTint = vec3(0.35);
+    } else {
+      // dim base everywhere + the trail lifts the cell toward full brightness;
+      // no extra lum scaling — the glyph itself already encodes luminance
+      bright = clamp(uMatrixP.w + m * (1.0 - uMatrixP.w), 0.0, 1.0);
+    }
+  }
   vec2 inCell = fract(px / uCell);
   vec2 atlasUV = vec2((gi + inCell.x) / uGlyphCount, inCell.y);
   float ink = texture(uAtlas, atlasUV).r;
-  vec3 inkColor = (uColorMode == 1) ? clamp(c * 1.8, 0.0, 1.0) : uInk;
+  vec3 inkColor = (uColorMode == 1) ? clamp(c * uGain * 1.8, 0.0, 1.0) : uInk;
+  inkColor = clamp(inkColor * bright + headTint, 0.0, 1.0);
   vec3 asciiCol = mix(uBg, inkColor, ink);
   // rotoscoped text on top: halo (bg-colored, alpha) knocks out mosaic, fill is text
   vec4 txt = texture(uText, px / uOutSize) * uTextOn;
@@ -79,7 +122,7 @@ class AsciiRenderer {
     this.u = {};
     for (const name of ['uSrc','uAtlas','uOutSize','uCell','uRectOrigin','uRectSize',
                         'uGlyphCount','uLod','uColorMode','uInk','uBg','uInvert',
-                        'uText','uTextOn']) {
+                        'uGain','uGamma','uText','uTextOn','uMatrix','uTime','uMatrixP']) {
       this.u[name] = gl.getUniformLocation(prog, name);
     }
 
@@ -219,8 +262,19 @@ class AsciiRenderer {
     gl.uniform3fv(this.u.uInk, opts.ink || [0.55, 1.0, 0.55]);
     gl.uniform3fv(this.u.uBg, opts.bg || [0.02, 0.04, 0.02]);
     gl.uniform1f(this.u.uInvert, opts.invert ? 1 : 0);
+    gl.uniform1f(this.u.uGain, opts.gain || 1);
+    gl.uniform1f(this.u.uGamma, opts.gamma || 1);
     gl.uniform1i(this.u.uText, 2);
     gl.uniform1f(this.u.uTextOn, opts.textLayer ? 1 : 0);
+    gl.uniform1f(this.u.uMatrix, opts.matrix ? 1 : 0);
+    // wrap so fp32 sin() hashes stay clean on long sessions; a drop teleport
+    // once per ~68 min is invisible next to the constant flicker
+    gl.uniform1f(this.u.uTime, (opts.time || 0) % 4096);
+    gl.uniform4f(this.u.uMatrixP,
+      Math.max(1, Math.min(4, opts.matrixDrops || 3)),
+      opts.matrixSpeed || 1,
+      opts.matrixLen || 1,
+      opts.matrixAmbient == null ? 0.35 : opts.matrixAmbient);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
@@ -232,6 +286,9 @@ const PRESETS = {
   ascii10: ' .:-=+*#%@',
   ascii70: " .'`^\",:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",
   cyrillic: ' .,-:;тлпнсоеавыкзмджчцшщХЖМШЩ@',
+  // Written light->dark for readability, but the atlas re-sorts by measured ink
+  // anyway; fullwidth glyphs are auto-shrunk to fit the cell (ascii.js).
+  japanese: ' ・。、ーノつくめの一二人十七日口中今木水火田目年花虫魚金雨語電駅銀機闇龍響鬱',
   blocks: ' ▁▂▃▄▅▆▇█',
 };
 
@@ -519,8 +576,10 @@ if (window.__asciiShader) {
     textPass: true, cursorOn: true, hideNative: false, textMode: false,
     align: 'auto',                           // 'auto' | 'page' | 'viewport'
     debug: false,
+    matrix: false,                           // easter egg: Matrix rain, M key
+    matrixDrops: 3, matrixSpeed: 1,          // rain density/speed (panel selects)
   };
-  const VERSION = '0.2.1';
+  const VERSION = '0.2.7';
   const isExt = typeof chrome !== 'undefined' && !!(chrome.runtime && chrome.runtime.id);
   const cursor = new CursorLayer();
   let stream = null, domItems = null, domTimer = 0, scrollTimer = 0;
@@ -602,7 +661,7 @@ if (window.__asciiShader) {
     <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
       <select data-k="preset" style="flex:1">
         <option value="ascii10">ASCII 10</option><option value="ascii70">ASCII 70</option>
-        <option value="cyrillic">Кириллица</option><option value="blocks">Blocks</option>
+        <option value="cyrillic">Кириллица</option><option value="japanese">Японский 日本</option><option value="blocks">Blocks</option>
       </select>
       <select data-k="mode"><option value="0">mono</option><option value="1">color</option></select>
     </div>
@@ -628,6 +687,17 @@ if (window.__asciiShader) {
         <option value="viewport">вьюпорт</option>
       </select>
       <label><input data-k="debug" type="checkbox"> debug</label>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+      <label title="пасхалка: клавиша M"><input data-k="mtx" type="checkbox"> матрица</label>
+      <select data-k="mtxd" title="плотность дождя" style="flex:1">
+        <option value="1">редкий</option><option value="2">обычный</option>
+        <option value="3" selected>плотный</option><option value="4">ливень</option>
+      </select>
+      <select data-k="mtxs" title="скорость падения" style="flex:1">
+        <option value="0.5">медленно</option><option value="1" selected>обычно</option>
+        <option value="1.6">быстро</option>
+      </select>
     </div>`;
   panel.innerHTML = panel.innerHTML.replace('__VER__', VERSION);
   root.appendChild(panel);
@@ -770,6 +840,18 @@ if (window.__asciiShader) {
       $('textmode').checked = false;
       exitTextMode();
     }
+    // easter egg: the M key toggles Matrix rain while the filter runs (physical
+    // code OR letter m/ь — OSK/remote input often has empty e.code); never
+    // fires from inputs or with modifiers held
+    if ((e.code === 'KeyM' || /^[mь]$/i.test(e.key || '')) &&
+        !e.repeat && !e.ctrlKey && !e.altKey && !e.metaKey && state.running) {
+      const t = e.target;
+      if (!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))) {
+        state.matrix = !state.matrix;
+        const cb = $('mtx');
+        if (cb) cb.checked = state.matrix;
+      }
+    }
   }, { capture: true });
 
   function stop(byTrack, internal) {
@@ -833,6 +915,8 @@ if (window.__asciiShader) {
         colorMode: state.colorMode, invert: state.invert,
         ink: [0.55, 1.0, 0.55], bg: [0.02, 0.045, 0.02],
         textLayer: layerOn ? textCanvas : null,
+        matrix: state.matrix, time: t / 1000,
+        matrixDrops: state.matrixDrops, matrixSpeed: state.matrixSpeed,
       });
       $('fps').textContent = `${(1000 / emaMs).toFixed(0)} fps`;
       if (state.debug && cropDebug && (t - (tick._dbgT || 0)) > 500) {
@@ -909,6 +993,9 @@ if (window.__asciiShader) {
   $('copyall').addEventListener('click', copyAll);
   $('align').addEventListener('change', (e) => { state.align = e.target.value; });
   $('debug').addEventListener('change', (e) => { state.debug = e.target.checked; if (!state.debug) setStatus(''); });
+  $('mtx').addEventListener('change', (e) => { state.matrix = e.target.checked; });
+  $('mtxd').addEventListener('change', (e) => { state.matrixDrops = +e.target.value; });
+  $('mtxs').addEventListener('change', (e) => { state.matrixSpeed = +e.target.value; });
 
   if (isExt) {
     chrome.runtime.onMessage.addListener((msg) => {

@@ -166,7 +166,28 @@ const settings = {
   bias: 1.0,      // manual brightness multiplier on top, Ctrl+Alt+←/→
   debug: false,   // on-screen diagnostics line, Ctrl+Alt+D
   ocrOn: true,    // text rotoscope via Windows OCR helper, Ctrl+Alt+T
+  // easter egg: Matrix rain, Ctrl+Alt+M / tray. ASCII_MATRIX=1 starts with it
+  // on — lets --selftest capture render evidence
+  matrix: !!process.env.ASCII_MATRIX,
+  matrixDrops: 3,     // drops per column, 1..4
+  matrixSpeed: 1,     // fall speed multiplier
+  matrixLen: 1,       // trail length multiplier
+  matrixAmbient: 0.35, // base brightness of the normal mosaic under the rain
 };
+
+// --- multi-display: capture follows the window -------------------------------
+// `display` is the display we CAPTURE (the media handler picks the source by
+// display.id at request time) and the coordinate space for cursor/crop math.
+// It must track wherever the window (or the attach target) actually is — a
+// fixed getPrimaryDisplay() meant monitor 2 always showed monitor 1's pixels.
+function syncDisplayTo(rect) {
+  if (!rect) return;
+  const d = screen.getDisplayMatching(rect);
+  if (!d || (display && d.id === display.id)) return;
+  display = d;
+  logLine(`display switch -> id=${d.id} bounds=${JSON.stringify(d.bounds)}`);
+  if (win && !win.isDestroyed()) win.webContents.send('recapture');
+}
 
 // --- OCR helper (ocr-helper.ps1, Windows.Media.Ocr) --------------------------
 // Persistent child process; one request in flight: renderer sends a JPEG of the
@@ -235,7 +256,11 @@ function pushSettings() {
 }
 
 function createWindow() {
-  display = screen.getPrimaryDisplay();
+  // keep the display chosen by the mode switch / move tracking; fall back to
+  // primary only when unset or unplugged
+  if (!display || !screen.getAllDisplays().some((d) => d.id === display.id)) {
+    display = screen.getPrimaryDisplay();
+  }
   const b = display.bounds;
   shownOnce = false;
   const opts = {
@@ -319,6 +344,20 @@ function createWindow() {
   win.webContents.on('did-fail-load', (e, code, desc, url) => logLine(`did-fail-load ${code} ${desc} ${url}`));
   win.on('unresponsive', () => logLine('window unresponsive'));
   win.on('closed', () => { if (win === w) win = null; });
+  // dragging the framed window onto another monitor must retarget the capture
+  // (debounced: 'move' fires continuously during a drag); overlay windows never
+  // move, attached mode syncs from attachTick instead
+  if (!SELFTEST && !PROBE && !OCRTEST) {
+    let moveSync = null;
+    win.on('move', () => {
+      if (overlayMode || attached) return;
+      if (moveSync) clearTimeout(moveSync);
+      moveSync = setTimeout(() => {
+        moveSync = null;
+        if (win && !win.isDestroyed() && !overlayMode && !attached) syncDisplayTo(win.getBounds());
+      }, 250);
+    });
+  }
 }
 
 function ensureShown(via) {
@@ -349,6 +388,11 @@ function setOverlayMode(on) {
   if (WINDOWED) return;
   if (attached) stopAttach(false);
   if (overlayMode === on && !attached) { buildTray(); return; }
+  // F11 fullscreens onto the monitor the window is currently on (and back)
+  if (win && !win.isDestroyed()) {
+    const d = screen.getDisplayMatching(win.getBounds());
+    if (d) display = d;
+  }
   overlayMode = on;
   rebuildWindow();
 }
@@ -358,6 +402,12 @@ function attachTo(target) {
   overlayMode = false;
   attached = { hwnd: target.hwnd, title: target.title, lastRect: null };
   settings.attachedTitle = target.title;
+  // capture the monitor the TARGET lives on, before the first frame
+  const px = targetRectPx(target.hwnd);
+  if (px) {
+    const d = screen.getDisplayMatching(screen.screenToDipRect(null, px));
+    if (d) display = d;
+  }
   rebuildWindow();
   attachTicks = 0;
   if (!attachTimer) attachTimer = setInterval(attachTick, 150);
@@ -389,6 +439,7 @@ function attachTick() {
     if (!r || r.x !== dip.x || r.y !== dip.y || r.width !== dip.width || r.height !== dip.height) {
       attached.lastRect = dip;
       win.setBounds(dip);
+      syncDisplayTo(dip); // target dragged to another monitor -> recapture there
     }
   }
   // if the target is foreground its owner chain already keeps us above it, but a
@@ -415,7 +466,96 @@ function toggleFilter() {
   if (!win) return;
   filterOn = !filterOn;
   filterOn ? (attached ? win.showInactive() : win.show()) : win.hide();
+  logLine('filter -> ' + (filterOn ? 'on' : 'off'));
   buildTray();
+}
+
+function toggleMatrix() {
+  settings.matrix = !settings.matrix;
+  pushSettings();
+  buildTray();
+  logLine('matrix -> ' + (settings.matrix ? 'on' : 'off'));
+}
+
+// --- configurable global hotkeys ---------------------------------------------
+// One registry for every action; bindings persist in userData/hotkeys.json and
+// are editable in the «Горячие клавиши» window (tray). Field lesson: a global
+// combo can be silently owned by ANOTHER app (register() just returns false),
+// so failures surface both in debug.log and in the editor UI, and every combo
+// is rebindable.
+const HOTKEY_ACTIONS = [
+  { id: 'toggle',    label: 'Фильтр вкл/выкл',        def: 'Control+Alt+A', run: () => toggleFilter() },
+  { id: 'overlay',   label: 'На весь экран / в окно', def: 'F11',           run: () => setOverlayMode(!overlayMode) },
+  { id: 'cellMinus', label: 'Ячейка мельче',          def: 'Control+Alt+Up',    run: () => setCell(-1) },
+  { id: 'cellPlus',  label: 'Ячейка крупнее',         def: 'Control+Alt+Down',  run: () => setCell(1) },
+  { id: 'brighter',  label: 'Ярче',                   def: 'Control+Alt+Right', run: () => setBias(1.25) },
+  { id: 'darker',    label: 'Темнее',                 def: 'Control+Alt+Left',  run: () => setBias(0.8) },
+  { id: 'ocr',       label: 'Текст поверх мозаики',   def: 'Control+Alt+T',
+    run: () => { settings.ocrOn = !settings.ocrOn; pushSettings(); buildTray(); } },
+  { id: 'debug',     label: 'Отладка',                def: 'Control+Alt+D',
+    run: () => { settings.debug = !settings.debug; pushSettings(); buildTray(); } },
+  { id: 'matrix',    label: 'Матрица (пасхалка)',     def: 'Control+Alt+M', run: () => toggleMatrix() },
+  { id: 'quit',      label: 'Выход',                  def: 'Control+Alt+X', run: () => app.quit() },
+];
+const binds = {};          // id -> accelerator string
+let hotkeyErrors = {};     // id -> error from the last registration pass
+let hotkeysWin = null;
+let hotkeysSuspended = false; // true while the editor captures a combo
+
+const hotkeysPath = () => path.join(app.getPath('userData'), 'hotkeys.json');
+
+function loadHotkeys() {
+  let saved = {};
+  try { saved = JSON.parse(fs.readFileSync(hotkeysPath(), 'utf8')); } catch { /* first run */ }
+  for (const a of HOTKEY_ACTIONS) binds[a.id] = typeof saved[a.id] === 'string' && saved[a.id] ? saved[a.id] : a.def;
+}
+
+function saveHotkeys() {
+  try { fs.writeFileSync(hotkeysPath(), JSON.stringify(binds, null, 2)); }
+  catch (e) { logLine('hotkeys save failed: ' + e.message); }
+}
+
+function registerHotkeys() {
+  globalShortcut.unregisterAll();
+  hotkeyErrors = {};
+  if (hotkeysSuspended) return; // editor is capturing — keys must reach its window
+  for (const a of HOTKEY_ACTIONS) {
+    const acc = binds[a.id];
+    if (!acc) continue;
+    let ok = false;
+    try { ok = globalShortcut.register(acc, a.run); }
+    catch (e) { hotkeyErrors[a.id] = 'некорректная комбинация'; logLine(`hotkey INVALID: ${a.id} = ${acc} (${e.message})`); continue; }
+    if (!ok) {
+      hotkeyErrors[a.id] = 'занято другой программой';
+      logLine(`hotkey REGISTER FAILED: ${a.id} = ${acc} (taken by another app?)`);
+    }
+  }
+}
+
+const prettyAccel = (acc) => String(acc || '')
+  .replace(/Control/g, 'Ctrl').replace(/\bUp\b/, '↑').replace(/\bDown\b/, '↓')
+  .replace(/\bLeft\b/, '←').replace(/\bRight\b/, '→');
+
+function openHotkeysWindow() {
+  if (hotkeysWin && !hotkeysWin.isDestroyed()) { hotkeysWin.show(); hotkeysWin.focus(); return; }
+  // the overlay guard must not cover the editor; screen-saver level + paused
+  // guard keeps the editor above the overlay (last asserter wins in the band)
+  guardPausedUntil = Date.now() + 3600 * 1000;
+  hotkeysWin = new BrowserWindow({
+    width: 500, height: 620, resizable: false, minimizable: false, maximizable: false,
+    title: 'Горячие клавиши — ASCII Shader', backgroundColor: '#0b100b',
+    webPreferences: { preload: path.join(__dirname, 'preload.js') },
+  });
+  hotkeysWin.setMenuBarVisibility(false);
+  hotkeysWin.setAlwaysOnTop(true, 'screen-saver');
+  hotkeysWin.loadFile(path.join(__dirname, 'hotkeys.html'));
+  hotkeysWin.on('closed', () => {
+    hotkeysWin = null;
+    hotkeysSuspended = false;
+    registerHotkeys(); // capture may have been active when the window died
+    guardPausedUntil = 0;
+  });
+  logLine('hotkeys editor opened');
 }
 
 function setCell(delta) {
@@ -473,10 +613,11 @@ function buildTray() {
     label, type: 'radio', checked: settings.preset === value,
     click: () => { settings.preset = value; pushSettings(); },
   });
+  const hk = (id) => (binds[id] ? ` (${prettyAccel(binds[id])})` : '');
   const menu = Menu.buildFromTemplate([
     { label: `ASCII Shader — ${filterOn ? 'включён' : 'выключен'}`, enabled: false },
     { type: 'separator' },
-    { label: overlayMode ? 'Оконный режим (F11)' : 'На весь экран (F11)',
+    { label: (overlayMode ? 'Оконный режим' : 'На весь экран') + hk('overlay'),
       click: () => setOverlayMode(!overlayMode) },
     { label: 'Привязка к приложению', submenu: (() => {
         if (attached) return [
@@ -492,35 +633,69 @@ function buildTray() {
         items.push({ type: 'separator' }, { label: 'Обновить список', click: () => buildTray() });
         return items;
       })() },
-    { label: filterOn ? 'Выключить (Ctrl+Alt+A)' : 'Включить (Ctrl+Alt+A)', click: toggleFilter },
+    { label: (filterOn ? 'Выключить' : 'Включить') + hk('toggle'), click: toggleFilter },
     { type: 'separator' },
     { label: `Ячейка: ${settings.cell}px`, enabled: false },
-    { label: 'Мельче (Ctrl+Alt+↑)', click: () => setCell(-1) },
-    { label: 'Крупнее (Ctrl+Alt+↓)', click: () => setCell(1) },
+    { label: 'Мельче' + hk('cellMinus'), click: () => setCell(-1) },
+    { label: 'Крупнее' + hk('cellPlus'), click: () => setCell(1) },
     { type: 'separator' },
     presetItem('ASCII 10', 'ascii10'),
     presetItem('ASCII 70', 'ascii70'),
     presetItem('Кириллица', 'cyrillic'),
+    presetItem('Японский 日本', 'japanese'),
     presetItem('Блоки ▁▂▃', 'blocks'),
     { type: 'separator' },
     { label: 'Цвет по ячейкам', type: 'checkbox', checked: settings.colorMode === 1,
       click: (m) => { settings.colorMode = m.checked ? 1 : 0; pushSettings(); } },
     { label: 'Инверсия', type: 'checkbox', checked: settings.invert,
       click: (m) => { settings.invert = m.checked; pushSettings(); } },
+    { label: 'Матрица' + hk('matrix'), submenu: (() => {
+        const opt = (label, field, value) => ({
+          label, type: 'radio', checked: settings[field] === value,
+          click: () => { settings[field] = value; pushSettings(); },
+        });
+        return [
+          { label: 'Включена', type: 'checkbox', checked: !!settings.matrix,
+            click: () => toggleMatrix() },
+          { type: 'separator' },
+          { label: 'Плотность', enabled: false },
+          opt('Редкий дождь', 'matrixDrops', 1),
+          opt('Обычный', 'matrixDrops', 2),
+          opt('Плотный', 'matrixDrops', 3),
+          opt('Ливень', 'matrixDrops', 4),
+          { type: 'separator' },
+          { label: 'Скорость', enabled: false },
+          opt('Медленно', 'matrixSpeed', 0.5),
+          opt('Обычно', 'matrixSpeed', 1),
+          opt('Быстро', 'matrixSpeed', 1.6),
+          { type: 'separator' },
+          { label: 'Хвосты', enabled: false },
+          opt('Короткие', 'matrixLen', 0.6),
+          opt('Обычные', 'matrixLen', 1),
+          opt('Длинные', 'matrixLen', 1.5),
+          { type: 'separator' },
+          { label: 'Яркость фоновой мозаики', enabled: false },
+          opt('Выкл (только дождь)', 'matrixAmbient', 0),
+          opt('Тусклая', 'matrixAmbient', 0.2),
+          opt('Обычная', 'matrixAmbient', 0.35),
+          opt('Яркая', 'matrixAmbient', 0.5),
+        ];
+      })() },
     { label: 'ASCII-курсор', type: 'checkbox', checked: settings.cursorOn,
       click: (m) => { settings.cursorOn = m.checked; pushSettings(); } },
     { type: 'separator' },
     { label: 'Авто-яркость (ночные сцены)', type: 'checkbox', checked: settings.exposure,
       click: (m) => { settings.exposure = m.checked; pushSettings(); } },
     { label: `Яркость: ×${settings.bias.toFixed(2)}`, enabled: false },
-    { label: 'Ярче (Ctrl+Alt+→)', click: () => setBias(1.25) },
-    { label: 'Темнее (Ctrl+Alt+←)', click: () => setBias(0.8) },
-    { label: 'Текст поверх мозаики (Ctrl+Alt+T)', type: 'checkbox', checked: settings.ocrOn,
+    { label: 'Ярче' + hk('brighter'), click: () => setBias(1.25) },
+    { label: 'Темнее' + hk('darker'), click: () => setBias(0.8) },
+    { label: 'Текст поверх мозаики' + hk('ocr'), type: 'checkbox', checked: settings.ocrOn,
       click: (m) => { settings.ocrOn = m.checked; pushSettings(); } },
-    { label: 'Отладка (Ctrl+Alt+D)', type: 'checkbox', checked: settings.debug,
+    { label: 'Отладка' + hk('debug'), type: 'checkbox', checked: settings.debug,
       click: (m) => { settings.debug = m.checked; pushSettings(); } },
     { type: 'separator' },
-    { label: 'Выход (Ctrl+Alt+X)', click: () => app.quit() },
+    { label: 'Горячие клавиши…', click: openHotkeysWindow },
+    { label: 'Выход' + hk('quit'), click: () => app.quit() },
   ]);
   menu.on('menu-will-show', () => { guardPausedUntil = Date.now() + 60000; });
   menu.on('menu-will-close', () => { guardPausedUntil = 0; });
@@ -529,10 +704,17 @@ function buildTray() {
 }
 
 app.whenReady().then(() => {
-  // promptless capture: auto-pick the screen source, no share dialog
+  // promptless capture: auto-pick the screen source for the CURRENT display, no
+  // share dialog. display_id can be empty on some Windows setups — fall back to
+  // matching by monitor index (Chromium enumerates screens in display order)
+  // before the old first-source fallback, and log the pick for field diagnosis.
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
-      const target = sources.find((s) => String(s.display_id) === String(display.id)) || sources[0];
+      const idx = screen.getAllDisplays().findIndex((d) => d.id === display.id);
+      const target = sources.find((s) => String(s.display_id) === String(display.id))
+        || sources[idx] || sources[0];
+      logLine(`capture: display=${display.id} -> source "${target && target.name}" ` +
+        `display_id=${target && target.display_id} (${sources.length} screens)`);
       callback(target ? { video: target } : {});
     }).catch(() => callback({}));
   }, { useSystemPicker: false });
@@ -555,27 +737,55 @@ app.whenReady().then(() => {
     }, 1200);
   }
   if (!SELFTEST && !PROBE) {
+    loadHotkeys();
+    registerHotkeys();
     buildTray();
-    globalShortcut.register('Control+Alt+A', toggleFilter);
-    globalShortcut.register('Control+Alt+X', () => app.quit());
-    globalShortcut.register('Control+Alt+Up', () => setCell(-1));
-    globalShortcut.register('Control+Alt+Down', () => setCell(1));
-    globalShortcut.register('Control+Alt+Right', () => setBias(1.25));
-    globalShortcut.register('Control+Alt+Left', () => setBias(0.8));
-    globalShortcut.register('Control+Alt+D', () => {
-      settings.debug = !settings.debug; pushSettings(); buildTray();
-    });
-    globalShortcut.register('F11', () => setOverlayMode(!overlayMode));
-    globalShortcut.register('Control+Alt+T', () => {
-      settings.ocrOn = !settings.ocrOn; pushSettings(); buildTray();
-    });
+    // ASCII_HOTKEYS=1 — open the bind editor right away (diagnostics/automation)
+    if (process.env.ASCII_HOTKEYS) setTimeout(openHotkeysWindow, 2500);
   }
+
+  ipcMain.handle('hotkeys:list', () => HOTKEY_ACTIONS.map((a) => ({
+    id: a.id, label: a.label, accel: binds[a.id], pretty: prettyAccel(binds[a.id]),
+    error: hotkeyErrors[a.id] || null,
+  })));
+  ipcMain.handle('hotkeys:set', (e, id, accel) => {
+    const act = HOTKEY_ACTIONS.find((a) => a.id === id);
+    if (!act || typeof accel !== 'string' || !accel) return { ok: false, error: 'некорректный запрос' };
+    const clash = HOTKEY_ACTIONS.find((a) => a.id !== id && binds[a.id] === accel);
+    if (clash) {
+      hotkeysSuspended = false;
+      registerHotkeys();
+      return { ok: false, error: `уже используется: ${clash.label}` };
+    }
+    binds[id] = accel;
+    hotkeysSuspended = false;
+    registerHotkeys();
+    saveHotkeys();
+    buildTray();
+    logLine(`hotkey set: ${id} = ${accel}` + (hotkeyErrors[id] ? ` (FAILED: ${hotkeyErrors[id]})` : ''));
+    return { ok: !hotkeyErrors[id], error: hotkeyErrors[id] || null };
+  });
+  ipcMain.handle('hotkeys:reset', () => {
+    for (const a of HOTKEY_ACTIONS) binds[a.id] = a.def;
+    hotkeysSuspended = false;
+    registerHotkeys();
+    saveHotkeys();
+    buildTray();
+    logLine('hotkeys reset to defaults');
+    return true;
+  });
+  ipcMain.on('hotkeys:capture', (e, on) => {
+    hotkeysSuspended = !!on;
+    registerHotkeys();
+  });
 
   // fullscreen games may switch the display mode; refit the window and let the
   // renderer restart its capture (the old track often dies on a mode change)
   screen.on('display-metrics-changed', () => {
     if (WINDOWED || !win || win.isDestroyed()) return;
-    display = screen.getPrimaryDisplay();
+    // keep following the SAME display through mode changes; fall back to
+    // primary only if it disappeared (unplugged)
+    display = screen.getAllDisplays().find((d) => d.id === display.id) || screen.getPrimaryDisplay();
     if (overlayMode) win.setBounds(display.bounds);
     win.webContents.send('recapture');
   });

@@ -27,7 +27,12 @@ uniform float uGain;         // exposure multiplier, 1 = neutral (dark-scene lif
 uniform float uGamma;        // tone-curve exponent, 1 = linear
 uniform sampler2D uText;     // text passthrough layer (output-sized, straight alpha)
 uniform float uTextOn;       // 0 or 1
+uniform float uMatrix;       // Matrix-rain easter egg, 0 or 1
+uniform float uTime;         // seconds (pre-wrapped on CPU to keep fp32 precision)
+uniform vec4  uMatrixP;      // rain params: drops/column (1..4), speed mul, trail mul, ambient
 out vec4 outColor;
+
+float hash1(float n) { return fract(sin(n) * 43758.5453); }
 
 void main() {
   vec2 px = gl_FragCoord.xy;
@@ -39,10 +44,45 @@ void main() {
   lum = pow(clamp(lum * uGain, 0.0, 1.0), uGamma);
   lum = mix(lum, 1.0 - lum, uInvert);
   float gi = clamp(floor(lum * uGlyphCount), 0.0, uGlyphCount - 1.0);
+  float bright = 1.0;
+  vec3 headTint = vec3(0.0);
+  if (uMatrix > 0.5) {
+    // Matrix rain over the NORMAL mosaic: the regular luminance-mapped frame
+    // stays fully readable at a dim base level (uMatrixP.w), and drops LIGHT
+    // CELLS UP to full brightness as they fall — bright symbols raining over
+    // a dark copy of the image. Glyphs are the image's own everywhere; only
+    // the 1-cell head scrambles (the classic "decoding" look).
+    float rows = max(1.0, floor(uOutSize.y / uCell.y));
+    float rowTop = rows - 1.0 - cellIdx.y;                   // 0 at the top edge
+    float m = 0.0;
+    float isHead = 0.0;
+    for (int k = 0; k < 4; k++) {
+      if (float(k) >= uMatrixP.x) break;                     // density setting
+      float ch = hash1(cellIdx.x * 127.1 + float(k) * 51.7); // per-drop phase
+      float speed = mix(8.0, 22.0, fract(ch * 7.31)) * uMatrixP.y; // cells/sec
+      float len = max(3.0, mix(10.0, 26.0, fract(ch * 3.77)) * uMatrixP.z);
+      float head = mod(uTime * speed + ch * 331.7, rows + len);
+      float d = head - rowTop;                               // 0 at head, grows up the trail
+      if (d >= 0.0 && d < len) m = max(m, pow(1.0 - d / len, 1.6));
+      if (d >= 0.0 && d < 1.0) isHead = 1.0;
+    }
+    if (isHead > 0.5) {
+      float g = hash1(dot(vec2(cellIdx.x, rowTop * 0.37 + floor(uTime * 12.0)),
+                          vec2(12.9898, 78.233)));
+      gi = 1.0 + floor(g * (uGlyphCount - 1.0));
+      bright = 1.0;
+      headTint = vec3(0.35);
+    } else {
+      // dim base everywhere + the trail lifts the cell toward full brightness;
+      // no extra lum scaling — the glyph itself already encodes luminance
+      bright = clamp(uMatrixP.w + m * (1.0 - uMatrixP.w), 0.0, 1.0);
+    }
+  }
   vec2 inCell = fract(px / uCell);
   vec2 atlasUV = vec2((gi + inCell.x) / uGlyphCount, inCell.y);
   float ink = texture(uAtlas, atlasUV).r;
   vec3 inkColor = (uColorMode == 1) ? clamp(c * uGain * 1.8, 0.0, 1.0) : uInk;
+  inkColor = clamp(inkColor * bright + headTint, 0.0, 1.0);
   vec3 asciiCol = mix(uBg, inkColor, ink);
   // rotoscoped text on top: halo (bg-colored, alpha) knocks out mosaic, fill is text
   vec4 txt = texture(uText, px / uOutSize) * uTextOn;
@@ -77,7 +117,7 @@ export class AsciiRenderer {
     this.u = {};
     for (const name of ['uSrc','uAtlas','uOutSize','uCell','uRectOrigin','uRectSize',
                         'uGlyphCount','uLod','uColorMode','uInk','uBg','uInvert',
-                        'uGain','uGamma','uText','uTextOn']) {
+                        'uGain','uGamma','uText','uTextOn','uMatrix','uTime','uMatrixP']) {
       this.u[name] = gl.getUniformLocation(prog, name);
     }
 
@@ -221,6 +261,15 @@ export class AsciiRenderer {
     gl.uniform1f(this.u.uGamma, opts.gamma || 1);
     gl.uniform1i(this.u.uText, 2);
     gl.uniform1f(this.u.uTextOn, opts.textLayer ? 1 : 0);
+    gl.uniform1f(this.u.uMatrix, opts.matrix ? 1 : 0);
+    // wrap so fp32 sin() hashes stay clean on long sessions; a drop teleport
+    // once per ~68 min is invisible next to the constant flicker
+    gl.uniform1f(this.u.uTime, (opts.time || 0) % 4096);
+    gl.uniform4f(this.u.uMatrixP,
+      Math.max(1, Math.min(4, opts.matrixDrops || 3)),
+      opts.matrixSpeed || 1,
+      opts.matrixLen || 1,
+      opts.matrixAmbient == null ? 0.35 : opts.matrixAmbient);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }

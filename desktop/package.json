@@ -1,6 +1,6 @@
 {
   "name": "ascii-shader-desktop",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "description": "Whole-screen real-time ASCII filter for Windows",
   "main": "main.js",
   "scripts": {

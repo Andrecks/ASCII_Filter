@@ -23,8 +23,10 @@ if (window.__asciiShader) {
     textPass: true, cursorOn: true, hideNative: false, textMode: false,
     align: 'auto',                           // 'auto' | 'page' | 'viewport'
     debug: false,
+    matrix: false,                           // easter egg: Matrix rain, M key
+    matrixDrops: 3, matrixSpeed: 1,          // rain density/speed (panel selects)
   };
-  const VERSION = '0.2.1';
+  const VERSION = '0.2.7';
   const isExt = typeof chrome !== 'undefined' && !!(chrome.runtime && chrome.runtime.id);
   const cursor = new CursorLayer();
   let stream = null, domItems = null, domTimer = 0, scrollTimer = 0;
@@ -106,7 +108,7 @@ if (window.__asciiShader) {
     <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
       <select data-k="preset" style="flex:1">
         <option value="ascii10">ASCII 10</option><option value="ascii70">ASCII 70</option>
-        <option value="cyrillic">Кириллица</option><option value="blocks">Blocks</option>
+        <option value="cyrillic">Кириллица</option><option value="japanese">Японский 日本</option><option value="blocks">Blocks</option>
       </select>
       <select data-k="mode"><option value="0">mono</option><option value="1">color</option></select>
     </div>
@@ -132,6 +134,17 @@ if (window.__asciiShader) {
         <option value="viewport">вьюпорт</option>
       </select>
       <label><input data-k="debug" type="checkbox"> debug</label>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+      <label title="пасхалка: клавиша M"><input data-k="mtx" type="checkbox"> матрица</label>
+      <select data-k="mtxd" title="плотность дождя" style="flex:1">
+        <option value="1">редкий</option><option value="2">обычный</option>
+        <option value="3" selected>плотный</option><option value="4">ливень</option>
+      </select>
+      <select data-k="mtxs" title="скорость падения" style="flex:1">
+        <option value="0.5">медленно</option><option value="1" selected>обычно</option>
+        <option value="1.6">быстро</option>
+      </select>
     </div>`;
   panel.innerHTML = panel.innerHTML.replace('__VER__', VERSION);
   root.appendChild(panel);
@@ -274,6 +287,18 @@ if (window.__asciiShader) {
       $('textmode').checked = false;
       exitTextMode();
     }
+    // easter egg: the M key toggles Matrix rain while the filter runs (physical
+    // code OR letter m/ь — OSK/remote input often has empty e.code); never
+    // fires from inputs or with modifiers held
+    if ((e.code === 'KeyM' || /^[mь]$/i.test(e.key || '')) &&
+        !e.repeat && !e.ctrlKey && !e.altKey && !e.metaKey && state.running) {
+      const t = e.target;
+      if (!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))) {
+        state.matrix = !state.matrix;
+        const cb = $('mtx');
+        if (cb) cb.checked = state.matrix;
+      }
+    }
   }, { capture: true });
 
   function stop(byTrack, internal) {
@@ -337,6 +362,8 @@ if (window.__asciiShader) {
         colorMode: state.colorMode, invert: state.invert,
         ink: [0.55, 1.0, 0.55], bg: [0.02, 0.045, 0.02],
         textLayer: layerOn ? textCanvas : null,
+        matrix: state.matrix, time: t / 1000,
+        matrixDrops: state.matrixDrops, matrixSpeed: state.matrixSpeed,
       });
       $('fps').textContent = `${(1000 / emaMs).toFixed(0)} fps`;
       if (state.debug && cropDebug && (t - (tick._dbgT || 0)) > 500) {
@@ -413,6 +440,9 @@ if (window.__asciiShader) {
   $('copyall').addEventListener('click', copyAll);
   $('align').addEventListener('change', (e) => { state.align = e.target.value; });
   $('debug').addEventListener('change', (e) => { state.debug = e.target.checked; if (!state.debug) setStatus(''); });
+  $('mtx').addEventListener('change', (e) => { state.matrix = e.target.checked; });
+  $('mtxd').addEventListener('change', (e) => { state.matrixDrops = +e.target.value; });
+  $('mtxs').addEventListener('change', (e) => { state.matrixSpeed = +e.target.value; });
 
   if (isExt) {
     chrome.runtime.onMessage.addListener((msg) => {

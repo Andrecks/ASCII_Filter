@@ -278,6 +278,12 @@ function tick(t) {
         ink: [0.55, 1.0, 0.55],
         bg: [0.02, 0.045, 0.02],
         textLayer: textOn ? textCanvas : null,
+        matrix: !!settings.matrix,
+        time: t / 1000,
+        matrixDrops: settings.matrixDrops,
+        matrixSpeed: settings.matrixSpeed,
+        matrixLen: settings.matrixLen,
+        matrixAmbient: settings.matrixAmbient,
       });
     if (SELFTEST || PROBE || OCRTEST) {
       frames++;

@@ -3,8 +3,9 @@
 Real-time ASCII filter (WebGL2 fragment shader) shipped in three forms that share
 ONE pipeline. PLAN.md is the source of truth: phase history, root causes, evidence,
 open [ ] USER items. Keep maintaining it in the same style (checklists + measured
-numbers + field-bug postmortems). This file is the fast map + the gotchas that are
-NOT obvious from reading the code.
+numbers + field-bug postmortems). CHANGELOG.md is the user-facing release notes —
+add an entry whenever desktop/extension versions bump. This file is the fast map +
+the gotchas that are NOT obvious from reading the code.
 
 ## Layout / data flow
 
@@ -12,7 +13,7 @@ NOT obvious from reading the code.
   - `ascii.js` — the renderer. Glyph atlas drawn with Canvas2D, auto-sorted by ink
     density → any charset becomes a luminance ramp; per-cell luminance sampled via
     mipmap `textureLod`; `uGain`/`uGamma` exposure uniforms (default 1 = neutral,
-    only desktop passes them). `presets.js` charsets (ascii10/70, cyrillic, blocks).
+    only desktop passes them). `presets.js` charsets (ascii10/70, cyrillic, japanese, blocks).
   - `textlayer.js` + `domtext.js` — the "rotoscope": real DOM text re-drawn over
     the mosaic (NO OCR anywhere, rejected permanently). `cursor.js` ASCII cursor.
     `textgrid.js` frame→copyable chars. `forward.js` synthetic input (split mode).
@@ -90,8 +91,23 @@ NOT obvious from reading the code.
   games average ~0.04 luminance — linear ramp alone maps everything to space.
 - Capture auto-restarts on track `ended` and on display-metrics-changed (games
   switching display mode kill the track); window re-fitted to new bounds.
-- Hotkeys: Ctrl+Alt+A toggle, ↑/↓ cell size, ←/→ brightness bias, D debug line
-  (video size / avg+max lum / gain / fps / track state / restarts), X quit.
+- Hotkeys are CONFIGURABLE: one HOTKEY_ACTIONS registry in main.js (defaults:
+  Ctrl+Alt+A toggle, ↑/↓ cell, ←/→ bias, D debug, T ocr, M matrix, X quit,
+  F11 overlay), persisted to userData/hotkeys.json, edited via tray «Горячие
+  клавиши…» (hotkeys.html; global binds suspend while it captures a combo;
+  register failures logged 'hotkey REGISTER FAILED' + shown per-row — combos
+  can be silently owned by other apps). ASCII_HOTKEYS=1 auto-opens the editor.
+  Matrix lives in a tray SUBMENU (toggle + density/speed/trail/ambient radios
+  -> settings.matrix* -> shader uniform uMatrixP; the rain REVEALS the normal
+  luminance-mapped mosaic, only drop heads scramble). Web pages/extension:
+  bare KeyM (or letter m/ь — e.code can be EMPTY from OSK/remote/synthetic
+  input); ext panel also has a matrix checkbox + density/speed selects.
+- Multi-display: `display` (the captured monitor + coordinate space) FOLLOWS the
+  window — framed-window drag (debounced 'move'), F11 (overlay opens on the
+  window's monitor), attach (target's monitor, re-checked every tick). Every switch
+  logs `display switch ->` + `capture:` lines in debug.log; the capture handler
+  matches source by display_id with a monitor-index fallback. Don't reintroduce
+  getPrimaryDisplay() as the fixed default.
 
 ## Run & verify (desktop)
 
