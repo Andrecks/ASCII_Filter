@@ -137,6 +137,14 @@ the gotchas that are NOT obvious from reading the code.
   touching the OCR path. Trap: PowerShell Get-Content decodes files as cp1251 by
   default — Cyrillic "mojibake" in artifacts is usually YOUR read, not the data;
   use the Read tool or -Encoding UTF8 before diagnosing.
+- Release flow (every user-facing update): bump desktop/package.json +
+  extension/manifest.json+panel versions → CHANGELOG.md entry → `node
+  desktop/build-dist.js` → commit + push → `node release.js`. The script
+  (dependency-free) creates GitHub Release v<desktop-version> on the branch
+  HEAD with the exe+zip attached and the newest CHANGELOG section as notes;
+  auth reuses the stored git credential (`git credential fill` — no gh CLI on
+  this machine); rerunning uploads only missing assets. Push BEFORE releasing
+  — the API creates the tag on current HEAD.
 - Distributable: `node desktop/build-dist.js` → desktop/dist/ (portable exe +
   zip; gitignored). The stage preserves the desktop/+proto/ sibling structure;
   asar stays OFF (ocr-helper.ps1 must be a real file for PowerShell, koffi is
